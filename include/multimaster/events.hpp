@@ -1,7 +1,7 @@
 #pragma once
 
-#include "multimaster/PeerId.hpp"
-#include "multimaster/Span.hpp"
+#include "multimaster/peer_id.hpp"
+#include "multimaster/span.hpp"
 
 #include <functional>
 #include <optional>

@@ -5,8 +5,8 @@
 ///
 /// Include this umbrella header to pull in the entire public surface.
 
-#include "multimaster/Config.hpp"
-#include "multimaster/Events.hpp"
-#include "multimaster/Mesh.hpp"
-#include "multimaster/PeerId.hpp"
-#include "multimaster/Span.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/events.hpp"
+#include "multimaster/mesh.hpp"
+#include "multimaster/peer_id.hpp"
+#include "multimaster/span.hpp"

@@ -1,8 +1,8 @@
 #include "test_harness.hpp"
 
-#include "EventLoop.hpp"
-#include "GossipRouter.hpp"
-#include "multimaster/Config.hpp"
+#include "event_loop.hpp"
+#include "gossip_router.hpp"
+#include "multimaster/config.hpp"
 
 #include <string>
 #include <vector>

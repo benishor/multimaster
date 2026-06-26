@@ -14,17 +14,17 @@ option(MULTIMASTER_BUILD_TESTS    "Build multimaster tests"    ${PROJECT_IS_TOP_
 option(MULTIMASTER_BUILD_EXAMPLES "Build multimaster examples" ${PROJECT_IS_TOP_LEVEL})
 
 add_library(multimaster
-    src/PeerId.cpp
-    src/Socket.cpp
-    src/Wire.cpp
-    src/EventLoop.cpp
-    src/Listener.cpp
-    src/PeerConnection.cpp
-    src/Discovery.cpp
-    src/GossipRouter.cpp
-    src/PeerManager.cpp
-    src/MeshImpl.cpp
-    src/Mesh.cpp)
+    src/peer_id.cpp
+    src/socket.cpp
+    src/wire.cpp
+    src/event_loop.cpp
+    src/listener.cpp
+    src/peer_connection.cpp
+    src/discovery.cpp
+    src/gossip_router.cpp
+    src/peer_manager.cpp
+    src/mesh_impl.cpp
+    src/mesh.cpp)
 add_library(multimaster::multimaster ALIAS multimaster)
 
 target_compile_features(multimaster PUBLIC cxx_std_20)

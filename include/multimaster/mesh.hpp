@@ -1,9 +1,9 @@
 #pragma once
 
-#include "multimaster/Config.hpp"
-#include "multimaster/Events.hpp"
-#include "multimaster/PeerId.hpp"
-#include "multimaster/Span.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/events.hpp"
+#include "multimaster/peer_id.hpp"
+#include "multimaster/span.hpp"
 
 #include <cstdint>
 #include <memory>

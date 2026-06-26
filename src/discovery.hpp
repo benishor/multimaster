@@ -1,11 +1,11 @@
 #pragma once
 
-#include "EventLoop.hpp"
-#include "PeerConnection.hpp" // LocalIdentity
-#include "Socket.hpp"
-#include "Wire.hpp"
-#include "multimaster/Config.hpp"
-#include "multimaster/Events.hpp"
+#include "event_loop.hpp"
+#include "peer_connection.hpp" // LocalIdentity
+#include "socket.hpp"
+#include "wire.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/events.hpp"
 
 #include <functional>
 #include <random>

@@ -1,6 +1,6 @@
 #include "test_harness.hpp"
 
-#include "Wire.hpp"
+#include "wire.hpp"
 
 #include <cstring>
 #include <string>

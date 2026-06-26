@@ -1,4 +1,4 @@
-#include "multimaster/PeerId.hpp"
+#include "multimaster/peer_id.hpp"
 
 #include <cstring>
 #include <random>

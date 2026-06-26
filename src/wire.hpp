@@ -1,6 +1,6 @@
 #pragma once
 
-#include "multimaster/PeerId.hpp"
+#include "multimaster/peer_id.hpp"
 
 #include <array>
 #include <cstddef>

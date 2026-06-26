@@ -1,4 +1,4 @@
-#include "GossipRouter.hpp"
+#include "gossip_router.hpp"
 
 #include <cstring>
 #include <random>

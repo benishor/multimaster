@@ -1,6 +1,6 @@
-#include "multimaster/Mesh.hpp"
+#include "multimaster/mesh.hpp"
 
-#include "MeshImpl.hpp"
+#include "mesh_impl.hpp"
 
 namespace mm {
 

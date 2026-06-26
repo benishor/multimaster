@@ -1,4 +1,4 @@
-#include "Discovery.hpp"
+#include "discovery.hpp"
 
 #include <array>
 #include <cerrno>

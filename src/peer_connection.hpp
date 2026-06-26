@@ -1,12 +1,12 @@
 #pragma once
 
-#include "Buffer.hpp"
-#include "EventLoop.hpp"
-#include "Socket.hpp"
-#include "Wire.hpp"
-#include "multimaster/Config.hpp"
-#include "multimaster/Events.hpp"
-#include "multimaster/PeerId.hpp"
+#include "buffer.hpp"
+#include "event_loop.hpp"
+#include "socket.hpp"
+#include "wire.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/events.hpp"
+#include "multimaster/peer_id.hpp"
 
 #include <cstdint>
 #include <span>

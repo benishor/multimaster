@@ -1,10 +1,10 @@
 #pragma once
 
-#include "EventLoop.hpp"
-#include "Wire.hpp"
-#include "multimaster/Config.hpp"
-#include "multimaster/PeerId.hpp"
-#include "multimaster/Span.hpp"
+#include "event_loop.hpp"
+#include "wire.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/peer_id.hpp"
+#include "multimaster/span.hpp"
 
 #include <cstdint>
 #include <deque>

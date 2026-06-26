@@ -71,14 +71,14 @@ See [`examples/chat.cpp`](examples/chat.cpp) (LAN broadcast chat) and
 
 All public headers live under [`include/multimaster/`](include/multimaster):
 
-| Header           | Contents                                                        |
-|------------------|----------------------------------------------------------------|
-| `Mesh.hpp`       | `Mesh` — the node facade (start/stop, broadcast/send, peers).   |
-| `Config.hpp`     | `MeshConfig`, `SeedPeer` — all tunables.                        |
-| `Events.hpp`     | `Callbacks`, `Error`, `ErrorCategory`.                          |
-| `PeerId.hpp`     | `PeerId` — 128-bit node id.                                     |
-| `Span.hpp`       | `Bytes` = `std::span<const std::byte>`.                         |
-| `multimaster.hpp`| umbrella header.                                                |
+| Header            | Contents                                                       |
+|-------------------|----------------------------------------------------------------|
+| `mesh.hpp`        | `Mesh` — the node facade (start/stop, broadcast/send, peers).   |
+| `config.hpp`      | `MeshConfig`, `SeedPeer` — all tunables.                        |
+| `events.hpp`      | `Callbacks`, `Error`, `ErrorCategory`.                          |
+| `peer_id.hpp`     | `PeerId` — 128-bit node id.                                     |
+| `span.hpp`        | `Bytes` = `std::span<const std::byte>`.                         |
+| `multimaster.hpp` | umbrella header.                                                |
 
 ### Threading contract
 

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "Discovery.hpp"
-#include "EventLoop.hpp"
-#include "Listener.hpp"
-#include "PeerConnection.hpp" // LocalIdentity
-#include "PeerManager.hpp"
-#include "multimaster/Config.hpp"
-#include "multimaster/Events.hpp"
-#include "multimaster/PeerId.hpp"
+#include "discovery.hpp"
+#include "event_loop.hpp"
+#include "listener.hpp"
+#include "peer_connection.hpp" // LocalIdentity
+#include "peer_manager.hpp"
+#include "multimaster/config.hpp"
+#include "multimaster/events.hpp"
+#include "multimaster/peer_id.hpp"
 
 #include <atomic>
 #include <cstdint>

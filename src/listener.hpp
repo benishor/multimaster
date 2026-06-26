@@ -1,7 +1,7 @@
 #pragma once
 
-#include "EventLoop.hpp"
-#include "Socket.hpp"
+#include "event_loop.hpp"
+#include "socket.hpp"
 
 #include <cstdint>
 #include <functional>
