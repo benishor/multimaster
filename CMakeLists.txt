@@ -12,8 +12,14 @@ endif()
 
 option(MULTIMASTER_BUILD_TESTS    "Build multimaster tests"    ${PROJECT_IS_TOP_LEVEL})
 option(MULTIMASTER_BUILD_EXAMPLES "Build multimaster examples" ${PROJECT_IS_TOP_LEVEL})
+# Link example/consumer executables against static libstdc++/libgcc so the
+# resulting binaries are portable across distributions (glibc stays dynamic, so
+# getaddrinfo/NSS — used for static-peer hostname resolution — keeps working).
+option(MULTIMASTER_STATIC_BINARIES "Statically link libstdc++/libgcc into executables" OFF)
 
-add_library(multimaster
+# Always a static archive (libmultimaster.a), regardless of BUILD_SHARED_LIBS,
+# so consumers statically link the library into their binary.
+add_library(multimaster STATIC
     src/peer_id.cpp
     src/socket.cpp
     src/wire.cpp
@@ -40,12 +46,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(multimaster PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Portable-binary link flags, applied to executables when requested.
+function(multimaster_link_static target)
+    if(MULTIMASTER_STATIC_BINARIES AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_link_options(${target} PRIVATE -static-libgcc -static-libstdc++)
+    endif()
+endfunction()
+
 if(MULTIMASTER_BUILD_EXAMPLES)
     add_executable(mm_chat examples/chat.cpp)
     target_link_libraries(mm_chat PRIVATE multimaster::multimaster)
+    multimaster_link_static(mm_chat)
 
     add_executable(mm_ping examples/ping.cpp)
     target_link_libraries(mm_ping PRIVATE multimaster::multimaster)
+    multimaster_link_static(mm_ping)
 endif()
 
 if(MULTIMASTER_BUILD_TESTS)

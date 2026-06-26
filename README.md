@@ -35,6 +35,27 @@ find_package(multimaster REQUIRED)
 target_link_libraries(your_app PRIVATE multimaster::multimaster)
 ```
 
+`multimaster` builds as a **static** library (`libmultimaster.a`), so it is
+linked directly into your binary — no shared object to ship alongside it.
+
+### Portable (statically linked) executables
+
+To produce binaries you can copy to other machines/distros, configure with
+`-DMULTIMASTER_STATIC_BINARIES=ON`. This links `libstdc++`/`libgcc` statically
+into the example executables (and the same helper is available for your own
+targets) while keeping `glibc` dynamic — so hostname resolution for
+seed/static peers (`getaddrinfo`) keeps working:
+
+```sh
+cmake -S . -B build -DMULTIMASTER_STATIC_BINARIES=ON
+cmake --build build
+ldd build/mm_chat   # no libstdc++.so / libgcc_s.so — only libc remains
+```
+
+> A fully static binary (`-static`) is intentionally not the default: glibc's
+> `getaddrinfo`/NSS does not work reliably when statically linked, which would
+> break dialing static/seed peers by hostname (numeric IPs would still work).
+
 ## Quick start
 
 ```cpp
