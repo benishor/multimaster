@@ -38,6 +38,9 @@ public:
     /// A Data frame arrived. `view.payload` is valid only for this call.
     virtual void on_peer_data(peer_connection& c, const data_view& view) = 0;
 
+    /// A Membership (adjacency gossip) frame arrived.
+    virtual void on_peer_membership(peer_connection& c, const membership_record& rec) = 0;
+
     /// The connection finished (peer closed, error, protocol violation, or
     /// Goodbye). The owner must arrange deferred reaping of `c`.
     virtual void on_peer_closed(peer_connection& c) = 0;

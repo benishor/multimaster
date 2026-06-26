@@ -48,11 +48,12 @@ std::optional<announce> decode_announce(std::span<const std::byte>);
 // ---------------------------------------------------------------------------
 
 enum class frame_type : std::uint8_t {
-    Hello     = 1,
-    HelloAck  = 2,
-    Heartbeat = 3,
-    Data      = 4,
-    Goodbye   = 5,
+    Hello      = 1,
+    HelloAck   = 2,
+    Heartbeat  = 3,
+    Data       = 4,
+    Goodbye    = 5,
+    Membership = 6, // adjacency gossip for mesh-wide membership
 };
 
 /// Body of a hello / HelloAck frame.
@@ -74,11 +75,21 @@ struct data_view {
     std::span<const std::byte>  payload;
 };
 
+/// Body of a Membership frame: one node's view of its own direct neighbors,
+/// flooded across the mesh so every node can derive the full membership. Ordered
+/// per origin by `version` (monotonic; seeded high enough to survive restarts).
+struct membership_record {
+    peer_id               origin;
+    std::uint64_t         version = 0;
+    std::vector<peer_id>  neighbors;
+};
+
 /// Result of one decode attempt against a stream buffer.
 struct parsed_frame {
-    frame_type type{};
-    hello     hello_msg; // valid for hello / HelloAck
-    data_view  data;     // valid for Data
+    frame_type        type{};
+    hello             hello_msg;  // valid for hello / HelloAck
+    data_view         data;       // valid for Data
+    membership_record membership; // valid for Membership
 };
 
 enum class decode_status { NeedMore, Ok, Error };
@@ -91,6 +102,8 @@ std::vector<std::byte> encode_goodbye();
 std::vector<std::byte> encode_data(const peer_id& src, const peer_id& dst,
                                   const message_id& msgId, std::uint8_t ttl,
                                   std::span<const std::byte> payload);
+/// Encode a Membership frame from an adjacency record.
+std::vector<std::byte> encode_membership(const membership_record&);
 
 /// Attempt to decode one frame from the front of `in`.
 ///  - NeedMore: not enough bytes yet; `consumed` untouched.

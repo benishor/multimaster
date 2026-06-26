@@ -59,8 +59,14 @@ public:
     [[nodiscard]] uint16_t listen_port() const noexcept;
 
     /// Non-blocking snapshots of mesh state.
+    /// connected_peers() — directly connected TCP neighbors.
+    /// known_peers()     — peers this node has directly learned of.
+    /// members()         — every node reachable anywhere in the mesh, learned via
+    ///                     membership gossip (includes peers reachable only via
+    ///                     relays / static-peer bridges; not direct neighbors).
     [[nodiscard]] std::vector<peer_id> connected_peers() const;
     [[nodiscard]] std::vector<peer_id> known_peers() const;
+    [[nodiscard]] std::vector<peer_id> members() const;
 
 private:
     std::unique_ptr<mesh_impl> impl_;

@@ -188,6 +188,21 @@ std::vector<std::byte> encode_data(const peer_id& src, const peer_id& dst,
     return b;
 }
 
+std::vector<std::byte> encode_membership(const membership_record& m) {
+    std::vector<std::byte> b;
+    b.reserve(4 + 1 + 16 + 8 + 2 + m.neighbors.size() * 16);
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::Membership));
+    put_id(b, m.origin);
+    put_u64(b, m.version);
+    put_u16(b, static_cast<std::uint16_t>(m.neighbors.size() > 0xFFFF ? 0xFFFF
+                                                                      : m.neighbors.size()));
+    std::size_t n = m.neighbors.size() > 0xFFFF ? 0xFFFF : m.neighbors.size();
+    for (std::size_t i = 0; i < n; ++i) put_id(b, m.neighbors[i]);
+    patch_length(b);
+    return b;
+}
+
 decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMessageBytes,
                             parsed_frame& out, std::size_t& consumed) {
     if (in.size() < 4) return decode_status::NeedMore;
@@ -227,6 +242,18 @@ decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMes
         out.data.ttl            = r.u8();
         std::uint32_t plen      = r.u32();
         out.data.payload        = r.take(plen);
+        break;
+    }
+    case frame_type::Membership: {
+        out.membership.neighbors.clear();
+        r.id(out.membership.origin);
+        out.membership.version = r.u64();
+        std::uint16_t count    = r.u16();
+        for (std::uint16_t i = 0; i < count && r.ok(); ++i) {
+            peer_id n;
+            r.id(n);
+            out.membership.neighbors.push_back(n);
+        }
         break;
     }
     default:

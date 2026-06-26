@@ -53,6 +53,14 @@ struct mesh_config {
     std::size_t maxDedupEntries = 100'000;
     std::size_t fanout          = 0; // 0 = dial every discovered peer (near-full mesh)
 
+    // --- membership (mesh-wide reachability via adjacency gossip) -----------
+    // Each node periodically floods its direct-neighbor set; every node derives
+    // the full membership (the connected component reachable from itself) and
+    // fires onMemberJoined/onMemberLeft. membershipInterval is the keepalive
+    // re-flood period; an entry not refreshed within membershipTimeout expires.
+    ms          membershipInterval{2000};
+    ms          membershipTimeout{8000};
+
     // --- backpressure / safety ---------------------------------------------
     enum class overflow { Disconnect, DropOldest, DropNewest };
     std::size_t maxOutboundQueueBytes = 8u << 20;  // 8 MiB per peer

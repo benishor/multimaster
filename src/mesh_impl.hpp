@@ -40,16 +40,20 @@ public:
     [[nodiscard]] std::uint16_t listen_port() const noexcept { return listenPort_.load(); }
     [[nodiscard]] std::vector<peer_id> connected_peers() const;
     [[nodiscard]] std::vector<peer_id> known_peers() const;
+    [[nodiscard]] std::vector<peer_id> members() const;
 
     // peer_manager_delegate
     void peer_discovered(const peer_id&) override;
     void peer_connected(const peer_id&) override;
     void peer_disconnected(const peer_id&) override;
     void peer_lost(const peer_id&) override;
+    void member_joined(const peer_id&) override;
+    void member_left(const peer_id&) override;
     void message_received(const peer_id& from, bytes payload) override;
     void on_error(const error&) override;
     void connected_snapshot(std::vector<peer_id>) override;
     void known_snapshot(std::vector<peer_id>) override;
+    void members_snapshot(std::vector<peer_id>) override;
 
 private:
     struct command {
@@ -82,6 +86,7 @@ private:
     mutable std::mutex                       snapMu_;
     std::shared_ptr<const std::vector<peer_id>> connectedSnap_;
     std::shared_ptr<const std::vector<peer_id>> knownSnap_;
+    std::shared_ptr<const std::vector<peer_id>> membersSnap_;
 };
 
 } // namespace mm

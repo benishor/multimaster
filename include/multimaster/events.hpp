@@ -49,6 +49,16 @@ struct callbacks {
     /// ceased and routing state for it was pruned.
     std::function<void(peer_id)> onPeerLost;
 
+    /// A node became reachable anywhere in the mesh — not necessarily a direct
+    /// TCP neighbor. Learned via membership gossip relayed across the mesh
+    /// (including over static-peer bridges). A direct neighbor fires both
+    /// onPeerConnected and onMemberJoined.
+    std::function<void(peer_id)> onMemberJoined;
+
+    /// A node is no longer reachable anywhere in the mesh (its bridge dropped,
+    /// it left, or its membership info expired).
+    std::function<void(peer_id)> onMemberLeft;
+
     /// Application data addressed to (or broadcast to) this node. `from` is the
     /// original sender, not necessarily a directly-connected neighbor.
     std::function<void(peer_id /*from*/, bytes)> onMessage;

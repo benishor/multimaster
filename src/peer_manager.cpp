@@ -11,7 +11,12 @@ namespace mm {
 peer_manager::peer_manager(event_loop& loop, const mesh_config& cfg, const local_identity& self,
                          peer_manager_delegate& delegate)
     : loop_(loop), cfg_(cfg), self_(self), delegate_(delegate),
-      router_(cfg, loop, self.nodeId), rng_(std::random_device{}()) {}
+      router_(cfg, loop, self.nodeId),
+      membership_(self.nodeId, cfg, delegate,
+                  [this](std::span<const std::byte> frame, int except_fd) {
+                      forward_except(frame, except_fd);
+                  }),
+      rng_(std::random_device{}()) {}
 
 peer_manager::~peer_manager() = default;
 
@@ -40,6 +45,7 @@ void peer_manager::shutdown() {
     records_.clear();
     static_targets_.clear();
     static_dial_conn_.clear();
+    membership_.clear();
     reap_.clear();
 }
 
@@ -185,11 +191,23 @@ void peer_manager::on_peer_handshake(peer_connection& c, const hello& peer) {
     if (!wasConnected) {
         delegate_.peer_connected(pid);
         emit_connected_snapshot();
+        update_local_membership(); // our direct-neighbor set grew
     }
 }
 
 void peer_manager::on_peer_data(peer_connection& c, const data_view& view) {
     router_.on_data(view, c.fd(), *this);
+}
+
+void peer_manager::on_peer_membership(peer_connection& c, const membership_record& rec) {
+    membership_.on_remote_record(rec, c.fd(), event_loop::clock::now());
+}
+
+void peer_manager::update_local_membership() {
+    std::vector<peer_id> direct;
+    direct.reserve(estab_.size());
+    for (const auto& [id, c] : estab_) direct.push_back(id);
+    membership_.set_local_neighbors(std::move(direct), event_loop::clock::now());
 }
 
 void peer_manager::on_peer_closed(peer_connection& c) {
@@ -227,6 +245,7 @@ void peer_manager::on_peer_closed(peer_connection& c) {
         if (wasConnected) {
             delegate_.peer_disconnected(rec->id);
             emit_connected_snapshot();
+            update_local_membership(); // our direct-neighbor set shrank
         }
         // Static peers are redialed by maintain_static_peers() (by endpoint, with
         // DNS re-resolution); all others use the id-keyed reconnect path.
@@ -340,6 +359,9 @@ void peer_manager::tick() {
 
     // Keep persistent static-peer connections up.
     maintain_static_peers();
+
+    // Membership upkeep: keepalive re-flood + expire stale records.
+    membership_.tick(now);
 
     // Fallback: if isolated, re-dial seed peers.
     if (estab_.empty()) dial_seeds();

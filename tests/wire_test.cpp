@@ -113,6 +113,40 @@ TEST("decode rejects oversized frame") {
     CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Error));
 }
 
+TEST("membership round-trip") {
+    membership_record m;
+    m.origin    = id_from(5);
+    m.version   = 0xA1B2C3D4E5F60718ULL;
+    m.neighbors = {id_from(20), id_from(40), id_from(60)};
+
+    auto frame = encode_membership(m);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK_EQ(static_cast<int>(out.type), static_cast<int>(frame_type::Membership));
+    CHECK(out.membership.origin == m.origin);
+    CHECK_EQ(out.membership.version, m.version);
+    CHECK_EQ(out.membership.neighbors.size(), m.neighbors.size());
+    CHECK(out.membership.neighbors[0] == m.neighbors[0]);
+    CHECK(out.membership.neighbors[2] == m.neighbors[2]);
+}
+
+TEST("membership with no neighbors round-trips") {
+    membership_record m;
+    m.origin  = id_from(1);
+    m.version = 7;
+    auto frame = encode_membership(m);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK(out.membership.neighbors.empty());
+    CHECK_EQ(out.membership.version, std::uint64_t{7});
+}
+
 TEST("two frames decode sequentially from one buffer") {
     auto hb1 = encode_heartbeat();
     auto hb2 = encode_goodbye();

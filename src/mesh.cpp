@@ -23,5 +23,6 @@ uint16_t mesh::listen_port() const noexcept { return impl_->listen_port(); }
 
 std::vector<peer_id> mesh::connected_peers() const { return impl_->connected_peers(); }
 std::vector<peer_id> mesh::known_peers() const { return impl_->known_peers(); }
+std::vector<peer_id> mesh::members() const { return impl_->members(); }
 
 } // namespace mm

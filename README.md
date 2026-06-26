@@ -101,6 +101,23 @@ All public headers live under [`include/multimaster/`](include/multimaster):
 | `span.hpp`        | `bytes` = `std::span<const std::byte>`.                         |
 | `multimaster.hpp` | umbrella header.                                                |
 
+### Direct peers vs mesh members
+
+The library distinguishes your **direct TCP neighbors** from the **whole-mesh
+membership**:
+
+- `onPeerConnected` / `onPeerDisconnected` / `onPeerLost` and `connected_peers()`
+  concern only the nodes you are *directly* connected to.
+- `onMemberJoined` / `onMemberLeft` and `members()` concern **every node
+  reachable anywhere in the mesh**, including ones you only reach through relays
+  or a static-peer bridge. This is learned via lightweight *membership gossip*:
+  each node periodically floods its direct-neighbor set, every node derives the
+  reachable component, and a member is dropped when its only path disappears or
+  its info expires (`membershipInterval` / `membershipTimeout`).
+
+So in `B —— A —— C` (A bridges B and C), B fires `onPeerConnected(A)` but
+`onMemberJoined(A)` *and* `onMemberJoined(C)`; `members()` on B returns `{A, C}`.
+
 ### Threading contract
 
 `broadcast`, `send`, and the introspection accessors are thread-safe and callable

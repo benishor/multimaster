@@ -28,6 +28,7 @@ add_library(multimaster STATIC
     src/peer_connection.cpp
     src/discovery.cpp
     src/gossip_router.cpp
+    src/membership.cpp
     src/peer_manager.cpp
     src/mesh_impl.cpp
     src/mesh.cpp)

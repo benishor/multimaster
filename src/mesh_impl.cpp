@@ -7,7 +7,8 @@ namespace mm {
 mesh_impl::mesh_impl(mesh_config cfg)
     : cfg_(std::move(cfg)),
       connectedSnap_(std::make_shared<std::vector<peer_id>>()),
-      knownSnap_(std::make_shared<std::vector<peer_id>>()) {
+      knownSnap_(std::make_shared<std::vector<peer_id>>()),
+      membersSnap_(std::make_shared<std::vector<peer_id>>()) {
     self_.nodeId          = cfg_.nodeId;
     self_.groupName       = cfg_.groupName;
     self_.protocolVersion = cfg_.protocolVersion;
@@ -138,6 +139,15 @@ std::vector<peer_id> mesh_impl::known_peers() const {
     return *snap;
 }
 
+std::vector<peer_id> mesh_impl::members() const {
+    std::shared_ptr<const std::vector<peer_id>> snap;
+    {
+        std::lock_guard lk(snapMu_);
+        snap = membersSnap_;
+    }
+    return *snap;
+}
+
 // --- peer_manager_delegate (all invoked on the IO thread) ---------------------
 
 void mesh_impl::peer_discovered(const peer_id& id) {
@@ -151,6 +161,12 @@ void mesh_impl::peer_disconnected(const peer_id& id) {
 }
 void mesh_impl::peer_lost(const peer_id& id) {
     if (cb_.onPeerLost) cb_.onPeerLost(id);
+}
+void mesh_impl::member_joined(const peer_id& id) {
+    if (cb_.onMemberJoined) cb_.onMemberJoined(id);
+}
+void mesh_impl::member_left(const peer_id& id) {
+    if (cb_.onMemberLeft) cb_.onMemberLeft(id);
 }
 void mesh_impl::message_received(const peer_id& from, bytes payload) {
     if (cb_.onMessage) cb_.onMessage(from, payload);
@@ -167,6 +183,11 @@ void mesh_impl::known_snapshot(std::vector<peer_id> v) {
     auto sp = std::make_shared<const std::vector<peer_id>>(std::move(v));
     std::lock_guard lk(snapMu_);
     knownSnap_ = std::move(sp);
+}
+void mesh_impl::members_snapshot(std::vector<peer_id> v) {
+    auto sp = std::make_shared<const std::vector<peer_id>>(std::move(v));
+    std::lock_guard lk(snapMu_);
+    membersSnap_ = std::move(sp);
 }
 
 } // namespace mm

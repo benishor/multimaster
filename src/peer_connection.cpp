@@ -183,6 +183,17 @@ void peer_connection::parse_inbound() {
             if (dead_) return;
             in_.consume(consumed);
             continue;
+        case frame_type::Membership:
+            if (state_ != conn_state::Established) {
+                fail(error_category::Protocol, 0, "membership before handshake");
+                return;
+            }
+            // frame.membership owns its data (decoded into a vector), so consume
+            // order is safe.
+            in_.consume(consumed);
+            listener_.on_peer_membership(*this, frame.membership);
+            if (dead_) return;
+            continue;
         }
         in_.consume(consumed);
     }

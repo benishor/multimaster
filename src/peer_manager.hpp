@@ -2,6 +2,7 @@
 
 #include "event_loop.hpp"
 #include "gossip_router.hpp"
+#include "membership.hpp"
 #include "peer_connection.hpp"
 #include "socket.hpp"
 #include "wire.hpp"
@@ -30,11 +31,14 @@ public:
     virtual void peer_connected(const peer_id&)                       = 0;
     virtual void peer_disconnected(const peer_id&)                    = 0;
     virtual void peer_lost(const peer_id&)                            = 0;
+    virtual void member_joined(const peer_id&)                        = 0;
+    virtual void member_left(const peer_id&)                          = 0;
     virtual void message_received(const peer_id& from, bytes payload) = 0;
     virtual void on_error(const error&)                                = 0;
     /// New snapshots whenever the relevant set changes (IO thread).
     virtual void connected_snapshot(std::vector<peer_id>)             = 0;
     virtual void known_snapshot(std::vector<peer_id>)                 = 0;
+    virtual void members_snapshot(std::vector<peer_id>)               = 0;
 };
 
 /// Owns all peer connections and the mesh's logical state: discovery → dial →
@@ -64,6 +68,7 @@ public:
     // connection_listener
     void on_peer_handshake(peer_connection& c, const hello& peer) override;
     void on_peer_data(peer_connection& c, const data_view& view) override;
+    void on_peer_membership(peer_connection& c, const membership_record& rec) override;
     void on_peer_closed(peer_connection& c) override;
     void report_error(const error& e) override;
 
@@ -113,6 +118,7 @@ private:
                                      sockaddr_in& out) const;
     void            schedule_reap();
     void            reap();
+    void            update_local_membership();
     void            emit_connected_snapshot();
     void            emit_known_snapshot();
     std::uint64_t   rand_nonce();
@@ -124,6 +130,7 @@ private:
     const local_identity& self_;
     peer_manager_delegate& delegate_;
     gossip_router         router_;
+    membership            membership_;
 
     std::vector<std::unique_ptr<peer_connection>> conns_;
     std::unordered_map<peer_id, peer_record>       records_;

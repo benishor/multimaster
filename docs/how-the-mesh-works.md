@@ -273,7 +273,7 @@ offset  size  field
 ```
 
 `frame_type` values: `Hello=1`, `HelloAck=2`, `Heartbeat=3`, `Data=4`,
-`Goodbye=5`.
+`Goodbye=5`, `Membership=6`.
 
 ### 5.3 Hello / HelloAck body
 
@@ -313,7 +313,20 @@ P   payload         # opaque application bytes
 Total Data frame on the wire = `4 (length) + 1 (type) + 16 + 16 + 16 + 1 + 4 + P`
 = **58 + P bytes**. The 58-byte header overhead is acceptable at LAN scale.
 
-### 5.7 Framing & partial I/O
+### 5.7 Membership body (the adjacency-gossip envelope)
+
+```
+16  originId          # the node whose neighbor set this is
+8   version           # monotonic per origin (restart-safe; ordering tag)
+2   neighborCount (N)
+N*16 neighbors        # originId's direct neighbors
+```
+
+Flooded across the mesh so every node can derive the full membership; see §11.6.
+Loop-free because a record `(origin, version)` is accepted/forwarded only if
+`version` is newer than the last one stored for that origin.
+
+### 5.8 Framing & partial I/O
 
 TCP is a byte stream: one `recv` may contain part of a frame, several frames, or a
 frame split across reads. The connection handles this with a `buffer` (an
@@ -704,6 +717,63 @@ hand it to their application. Only the addressed node delivers it.
 If you need reliability or ordering, build it on top of the opaque payload (e.g. a
 sequence number + ack of your own).
 
+### 11.6 Membership (mesh-wide reachability)
+
+Data routing only relays *messages*; it does not tell a node who else is in the
+mesh. That is the job of the **membership** subsystem (`membership.{hpp,cpp}`),
+which gossips topology so every node — even across a static-peer bridge — learns
+the full set of reachable nodes.
+
+**What each node maintains:**
+- `selfNeighbors_` — its own direct neighbors (the keys of `estab_`).
+- `view_` — the latest `membership_record` received per origin: `{version,
+  neighbors, lastSeen}`.
+- `members_` — the set currently reachable from self (excluding self).
+- `selfVersion_` — a monotonic counter, **seeded from the wall clock at startup**
+  so records minted after a restart outrank any still circulating from the prior
+  incarnation. Bumped on every self-flood.
+
+**Flooding & dedup.** A node floods its own record (`origin=self`,
+`version=++selfVersion_`, `neighbors=selfNeighbors_`):
+- immediately whenever its neighbor set changes (`set_local_neighbors`), and
+- as a keepalive every `membershipInterval` (in `tick`).
+
+On receiving a record for `origin O` with version `V`: if `O == self` ignore;
+else if `V` is newer than the stored version for `O`, store it (refresh
+`lastSeen`), recompute membership, and **re-flood to all neighbors except the
+inbound link**; otherwise drop. Because every flood carries a strictly higher
+version, each `(origin, version)` is forwarded at most once per node — the floods
+terminate without a TTL.
+
+**Deriving membership (`recompute_and_fire`).** Build an undirected graph: an edge
+`u—v` for every `v` in `u`'s neighbor list (from `selfNeighbors_` and every
+`view_` entry). BFS from `self`; the visited set minus `self` is the reachable
+membership. Diff against the previous `members_` → fire `onMemberJoined` for new
+nodes and `onMemberLeft` for departed ones, and publish the `members()` snapshot.
+
+**Expiry (`tick`).** Records not refreshed within `membershipTimeout` are dropped,
+then membership is recomputed. This is how a member whose only bridge died
+eventually disappears: its record stops being refreshed (the keepalives flowed
+through the dead bridge), expires, and BFS no longer reaches it.
+
+**Latency.** A *join*, or a change in direct links, propagates within one flood
+hop per mesh hop (near-immediate, since changes flood eagerly). A *leave* that
+relies on expiry (e.g. a bridge node dying) is observed after up to
+`membershipTimeout`. A graceful direct disconnect updates the neighbor set
+immediately, but a node only fully drops from `members_` once no path remains in
+any live record — bounded by `membershipTimeout`.
+
+**Worked example** — `B —— A —— C` (A bridges; B and C are not direct):
+1. B and C each connect to A. A's neighbor set becomes `{B, C}`; A floods
+   `A:{B,C}`.
+2. B receives `A:{B,C}` → graph edges `B—A`, `A—C` → BFS from B reaches `{A, C}`
+   → B fires `onMemberJoined(A)` and `onMemberJoined(C)`. B's `connected_peers()`
+   is still just `{A}`; its `members()` is `{A, C}`.
+3. C departs. A detects the direct drop, sets its neighbors to `{B}`, floods
+   `A:{B}`. C's own record (`C:{A}`) stops being refreshed and expires after
+   `membershipTimeout`; once gone, BFS from B no longer reaches C → B fires
+   `onMemberLeft(C)`.
+
 ---
 
 ## 12. Backpressure & safety limits
@@ -730,8 +800,9 @@ sequence number + ack of your own).
 | Timer | Period / delay | Re-arms? | Effect |
 |---|---|---|---|
 | Announce | `announceInterval` ±20% | yes | Multicast this node's presence. |
-| Tick | `heartbeatInterval` | yes | Heartbeats, liveness/handshake timeouts, Lost sweep, static-peer maintenance, seed re-dial if isolated. |
+| Tick | `heartbeatInterval` | yes | Heartbeats, liveness/handshake timeouts, Lost sweep, static-peer maintenance, membership keepalive + expiry, seed re-dial if isolated. |
 | Dedup sweep | `dedupTtl / 4` | yes | Evict dedup-cache entries older than `dedupTtl`. |
+| Membership keepalive | `membershipInterval` (driven by Tick) | yes | Re-flood this node's adjacency; expire records older than `membershipTimeout`. |
 | Reconnect | backoff `reconnectBase…reconnectMax` (+jitter) | no (re-armed on each drop) | Re-dial a dropped non-static peer. |
 | Reap | `0 ms` | no | Free connections marked dead during the current batch. |
 

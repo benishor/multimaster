@@ -216,4 +216,66 @@ TEST("static peer: connect, message, persistent reconnect") {
     node_b->stop();
 }
 
+// Bridged topology B —— A —— C: B and C are never direct neighbours (isolated
+// multicast ports; each only dials A as a static peer). Verifies that membership
+// gossip relayed through A lets B see C as a *member* (but not a direct *peer*),
+// and that B fires on_member_left when C departs.
+TEST("membership: non-direct peers visible via gossip; leave on departure") {
+    const uint16_t portA = 47150, portB = 47151, portC = 47152;
+
+    auto cfg = [](uint16_t port, uint16_t mport, std::vector<uint16_t> statics) {
+        mesh_config c;
+        c.groupName          = "membership-test-group";
+        c.bindAddr           = "127.0.0.1";
+        c.listenPort         = port;
+        c.multicastPort      = mport;     // distinct per node ⇒ no multicast pairing
+        c.multicastIface     = "127.0.0.1";
+        c.heartbeatInterval  = 300ms;
+        c.heartbeatTimeout   = 1500ms;
+        c.reconnectBase      = 200ms;
+        c.membershipInterval = 400ms;
+        c.membershipTimeout  = 1500ms;
+        for (uint16_t p : statics) c.staticPeers.push_back({"127.0.0.1", p});
+        return c;
+    };
+
+    std::atomic<int> bDirectToC{0};   // B should NEVER directly connect to C
+    std::atomic<int> bMemberC{0};     // B should see C as a member
+    std::atomic<int> bLeftC{0};       // B should see C leave
+
+    auto node_a = std::make_unique<mesh>(cfg(portA, 50150, {}));
+    auto node_b = std::make_unique<mesh>(cfg(portB, 50151, {portA}));
+    auto node_c = std::make_unique<mesh>(cfg(portC, 50152, {portA}));
+    node_a->set_callbacks({});
+
+    peer_id cId = node_c->id();
+    {
+        callbacks cb;
+        cb.onPeerConnected = [&, cId](peer_id p) { if (p == cId) bDirectToC++; };
+        cb.onMemberJoined  = [&, cId](peer_id p) { if (p == cId) bMemberC++; };
+        cb.onMemberLeft    = [&, cId](peer_id p) { if (p == cId) bLeftC++; };
+        node_b->set_callbacks(std::move(cb));
+    }
+    node_c->set_callbacks({});
+
+    node_a->start();
+    node_b->start();
+    node_c->start();
+
+    // B learns of C purely through A's relayed membership gossip.
+    CHECK(wait_for([&] { return bMemberC.load() >= 1; }, 5000ms));
+    // ... but never as a direct TCP peer.
+    CHECK_EQ(bDirectToC.load(), 0);
+    CHECK_EQ(node_b->connected_peers().size(), std::size_t{1}); // only A
+    // members() reflects the whole mesh (A and C).
+    CHECK(wait_for([&] { return node_b->members().size() >= 2; }, 5000ms));
+
+    // C departs; B must be told via on_member_left.
+    node_c.reset();
+    CHECK(wait_for([&] { return bLeftC.load() >= 1; }, 5000ms));
+
+    node_a.reset();
+    node_b->stop();
+}
+
 int main() { return mm::test::run(); }

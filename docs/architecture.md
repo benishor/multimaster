@@ -81,6 +81,7 @@ leak into consumer translation units.
 | `peer_connection` | `peer_connection.{hpp,cpp}` | One TCP connection: framed partial read/write, outbound queue, handshake state machine, heartbeat. |
 | `peer_manager` | `peer_manager.{hpp,cpp}` | Authoritative mesh state: per-peer records & FSM, dial-race resolution, reconnect/backoff, liveness, peer events. Also the `forwarder` the router drives. |
 | `gossip_router` | `gossip_router.{hpp,cpp}` | Forwarding policy: dedup cache, TTL, broadcast flood, targeted relay. Holds no sockets. |
+| `membership` | `membership.{hpp,cpp}` | Mesh-wide membership via adjacency gossip: floods each node's direct-neighbor set, derives the reachable component, fires member-joined/left. Drives `members()`. See [how-the-mesh-works §11.6](how-the-mesh-works.md#116-membership-mesh-wide-reachability). |
 | `socket` | `socket.{hpp,cpp}` | RAII fd wrapper + option helpers (`SOCK_CLOEXEC`, nonblock, reuse, multicast). |
 | `buffer` | `buffer.hpp` | Growable byte buffer with a consume cursor for partial I/O. |
 | `wire` | `wire.{hpp,cpp}` | Pure encode/decode of announce datagrams and TCP frames. No I/O; unit-testable in isolation. |
