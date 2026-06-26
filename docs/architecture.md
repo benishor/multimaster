@@ -5,6 +5,12 @@ model, the wire protocol, and the algorithms behind discovery, the gossip mesh,
 and self-healing reconnection. It complements the user-facing [README](../README.md),
 which covers the public API and how to consume the library.
 
+> For the exhaustive, byte- and algorithm-level reference — every wire field,
+> the full routing pseudocode, timing tables, worked examples, and a
+> failure-scenario catalog — see
+> [how-the-mesh-works.md](how-the-mesh-works.md). This page is the higher-level
+> tour; that one is the deep dive.
+
 ---
 
 ## 1. Goals & constraints

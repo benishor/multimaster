@@ -150,7 +150,10 @@ automatically (the connection-handshake logic keeps a single link per node).
 - Linux-only (epoll, `accept4`, `eventfd`).
 - Tuned for tens of nodes.
 
-## Architecture
+## Architecture & internals
 
-For the internals — components, threading model, wire protocol, gossip routing,
-and self-healing reconnection — see [docs/architecture.md](docs/architecture.md).
+- [docs/architecture.md](docs/architecture.md) — the design tour: components,
+  threading model, wire protocol, gossip routing, and self-healing reconnection.
+- [docs/how-the-mesh-works.md](docs/how-the-mesh-works.md) — the complete,
+  byte- and algorithm-level reference: every wire field, routing pseudocode,
+  timing tables, worked end-to-end examples, and a failure-scenario catalog.
