@@ -1,0 +1,21 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+*.cmake.user
+
+# Compiled objects / libraries / binaries
+*.o
+*.a
+*.so
+*.dylib
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
