@@ -11,33 +11,33 @@
 namespace mm {
 
 /// A 128-bit node identifier, unique per running mesh node. Generated randomly
-/// at startup (PeerId::generate) unless the caller pins one in MeshConfig.
+/// at startup (peer_id::generate) unless the caller pins one in mesh_config.
 ///
 /// The total ordering (operator<=>) is meaningful: it is used as the
 /// deterministic tie-break when two nodes dial each other simultaneously.
-struct PeerId {
+struct peer_id {
     std::array<std::byte, 16> bytes{};
 
-    bool operator==(const PeerId&) const = default;
-    auto operator<=>(const PeerId&) const = default;
+    bool operator==(const peer_id&) const = default;
+    auto operator<=>(const peer_id&) const = default;
 
     /// Lowercase hex, 32 chars, no separators.
-    [[nodiscard]] std::string toString() const;
+    [[nodiscard]] std::string to_string() const;
 
     /// Parse 32 hex chars (optionally with dashes, which are ignored).
     /// Returns nullopt on any malformed input.
-    [[nodiscard]] static std::optional<PeerId> fromString(std::string_view);
+    [[nodiscard]] static std::optional<peer_id> from_string(std::string_view);
 
     /// Cryptographically-unpredictable-enough random id (std::random_device).
-    [[nodiscard]] static PeerId generate();
+    [[nodiscard]] static peer_id generate();
 
     /// The all-zero id, which on the wire denotes "broadcast" as a destination.
-    [[nodiscard]] bool isZero() const;
+    [[nodiscard]] bool is_zero() const;
 };
 
 } // namespace mm
 
 template <>
-struct std::hash<mm::PeerId> {
-    std::size_t operator()(const mm::PeerId& id) const noexcept;
+struct std::hash<mm::peer_id> {
+    std::size_t operator()(const mm::peer_id& id) const noexcept;
 };

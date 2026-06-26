@@ -18,36 +18,36 @@ namespace mm {
 // ---------------------------------------------------------------------------
 
 /// 128-bit globally-unique-per-message id (originator-derived, no coordination).
-struct MessageId {
+struct message_id {
     std::array<std::byte, 16> bytes{};
-    bool operator==(const MessageId&) const = default;
+    bool operator==(const message_id&) const = default;
 };
 
 // ---------------------------------------------------------------------------
-// Discovery datagram (UDP multicast)
+// discovery datagram (UDP multicast)
 // ---------------------------------------------------------------------------
 
 inline constexpr std::uint32_t kAnnounceMagic = 0x4D4D4341; // 'M''M''C''A'
 
-struct Announce {
+struct announce {
     std::uint8_t protocolVersion = 0;
     std::uint8_t flags           = 0;
     std::uint16_t tcpListenPort  = 0;
-    PeerId        nodeId;
+    peer_id        nodeId;
     std::string   groupName;
 };
 
-/// Serialize an Announce to a datagram payload.
-std::vector<std::byte> encodeAnnounce(const Announce&);
+/// Serialize an announce to a datagram payload.
+std::vector<std::byte> encode_announce(const announce&);
 
 /// Parse a datagram. Returns nullopt on bad magic/length/format.
-std::optional<Announce> decodeAnnounce(std::span<const std::byte>);
+std::optional<announce> decode_announce(std::span<const std::byte>);
 
 // ---------------------------------------------------------------------------
 // TCP frames
 // ---------------------------------------------------------------------------
 
-enum class FrameType : std::uint8_t {
+enum class frame_type : std::uint8_t {
     Hello     = 1,
     HelloAck  = 2,
     Heartbeat = 3,
@@ -55,9 +55,9 @@ enum class FrameType : std::uint8_t {
     Goodbye   = 5,
 };
 
-/// Body of a Hello / HelloAck frame.
-struct Hello {
-    PeerId        nodeId;
+/// Body of a hello / HelloAck frame.
+struct hello {
+    peer_id        nodeId;
     std::uint8_t  protocolVersion = 0;
     std::uint16_t tcpListenPort   = 0;
     std::string   groupName;
@@ -66,42 +66,42 @@ struct Hello {
 
 /// A decoded application-data frame. `payload` is a view into the caller's input
 /// buffer and is only valid until that buffer is consumed/mutated.
-struct DataView {
-    PeerId                      src;
-    PeerId                      dst; // zero => broadcast
-    MessageId                   msgId;
+struct data_view {
+    peer_id                      src;
+    peer_id                      dst; // zero => broadcast
+    message_id                   msgId;
     std::uint8_t                ttl = 0;
     std::span<const std::byte>  payload;
 };
 
 /// Result of one decode attempt against a stream buffer.
-struct ParsedFrame {
-    FrameType type{};
-    Hello     hello;    // valid for Hello / HelloAck
-    DataView  data;     // valid for Data
+struct parsed_frame {
+    frame_type type{};
+    hello     hello_msg; // valid for hello / HelloAck
+    data_view  data;     // valid for Data
 };
 
-enum class DecodeStatus { NeedMore, Ok, Error };
+enum class decode_status { NeedMore, Ok, Error };
 
 // --- frame encoders (each returns a complete length-prefixed frame) ---------
-std::vector<std::byte> encodeHello(FrameType helloOrAck, const Hello&);
-std::vector<std::byte> encodeHeartbeat();
-std::vector<std::byte> encodeGoodbye();
+std::vector<std::byte> encode_hello(frame_type helloOrAck, const hello&);
+std::vector<std::byte> encode_heartbeat();
+std::vector<std::byte> encode_goodbye();
 /// Encode a Data frame. `payload` is copied into the returned buffer.
-std::vector<std::byte> encodeData(const PeerId& src, const PeerId& dst,
-                                  const MessageId& msgId, std::uint8_t ttl,
+std::vector<std::byte> encode_data(const peer_id& src, const peer_id& dst,
+                                  const message_id& msgId, std::uint8_t ttl,
                                   std::span<const std::byte> payload);
 
 /// Attempt to decode one frame from the front of `in`.
 ///  - NeedMore: not enough bytes yet; `consumed` untouched.
 ///  - Ok: `out` filled, `consumed` set to the frame's total byte length.
-///  - Error: malformed or exceeds maxMessageBytes; caller should drop the peer.
-DecodeStatus tryDecodeFrame(std::span<const std::byte> in, std::size_t maxMessageBytes,
-                            ParsedFrame& out, std::size_t& consumed);
+///  - error: malformed or exceeds maxMessageBytes; caller should drop the peer.
+decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMessageBytes,
+                            parsed_frame& out, std::size_t& consumed);
 
 } // namespace mm
 
 template <>
-struct std::hash<mm::MessageId> {
-    std::size_t operator()(const mm::MessageId& id) const noexcept;
+struct std::hash<mm::message_id> {
+    std::size_t operator()(const mm::message_id& id) const noexcept;
 };

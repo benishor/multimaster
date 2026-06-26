@@ -8,45 +8,45 @@ namespace {
 
 // --- little serialization helpers (all integers big-endian / network order) -
 
-void putU8(std::vector<std::byte>& b, std::uint8_t v) {
+void put_u8(std::vector<std::byte>& b, std::uint8_t v) {
     b.push_back(static_cast<std::byte>(v));
 }
-void putU16(std::vector<std::byte>& b, std::uint16_t v) {
+void put_u16(std::vector<std::byte>& b, std::uint16_t v) {
     b.push_back(static_cast<std::byte>((v >> 8) & 0xFF));
     b.push_back(static_cast<std::byte>(v & 0xFF));
 }
-void putU32(std::vector<std::byte>& b, std::uint32_t v) {
+void put_u32(std::vector<std::byte>& b, std::uint32_t v) {
     b.push_back(static_cast<std::byte>((v >> 24) & 0xFF));
     b.push_back(static_cast<std::byte>((v >> 16) & 0xFF));
     b.push_back(static_cast<std::byte>((v >> 8) & 0xFF));
     b.push_back(static_cast<std::byte>(v & 0xFF));
 }
-void putU64(std::vector<std::byte>& b, std::uint64_t v) {
+void put_u64(std::vector<std::byte>& b, std::uint64_t v) {
     for (int i = 7; i >= 0; --i) b.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
 }
-void putBytes(std::vector<std::byte>& b, const std::byte* p, std::size_t n) {
+void put_bytes(std::vector<std::byte>& b, const std::byte* p, std::size_t n) {
     b.insert(b.end(), p, p + n);
 }
-void putId(std::vector<std::byte>& b, const PeerId& id) {
-    putBytes(b, id.bytes.data(), id.bytes.size());
+void put_id(std::vector<std::byte>& b, const peer_id& id) {
+    put_bytes(b, id.bytes.data(), id.bytes.size());
 }
-void putMsgId(std::vector<std::byte>& b, const MessageId& id) {
-    putBytes(b, id.bytes.data(), id.bytes.size());
+void put_msg_id(std::vector<std::byte>& b, const message_id& id) {
+    put_bytes(b, id.bytes.data(), id.bytes.size());
 }
-void putStr(std::vector<std::byte>& b, const std::string& s) {
-    putU8(b, static_cast<std::uint8_t>(s.size() > 255 ? 255 : s.size()));
+void put_str(std::vector<std::byte>& b, const std::string& s) {
+    put_u8(b, static_cast<std::uint8_t>(s.size() > 255 ? 255 : s.size()));
     std::size_t n = s.size() > 255 ? 255 : s.size();
     b.insert(b.end(), reinterpret_cast<const std::byte*>(s.data()),
              reinterpret_cast<const std::byte*>(s.data()) + n);
 }
 
 /// Cursor-based reader with bounds checking. ok() == false after any overrun.
-struct Reader {
+struct reader {
     const std::byte* p;
     std::size_t      remaining;
     bool             bad = false;
 
-    explicit Reader(std::span<const std::byte> s) : p(s.data()), remaining(s.size()) {}
+    explicit reader(std::span<const std::byte> s) : p(s.data()), remaining(s.size()) {}
 
     bool ok() const { return !bad; }
 
@@ -70,13 +70,13 @@ struct Reader {
         for (int i = 0; i < 8; ++i) v = (v << 8) | u8();
         return v;
     }
-    void id(PeerId& out) {
+    void id(peer_id& out) {
         if (remaining < out.bytes.size()) { bad = true; return; }
         std::memcpy(out.bytes.data(), p, out.bytes.size());
         p += out.bytes.size();
         remaining -= out.bytes.size();
     }
-    void msgId(MessageId& out) {
+    void msg_id(message_id& out) {
         if (remaining < out.bytes.size()) { bad = true; return; }
         std::memcpy(out.bytes.data(), p, out.bytes.size());
         p += out.bytes.size();
@@ -100,7 +100,7 @@ struct Reader {
 };
 
 /// Overwrite a 4-byte big-endian length placeholder at offset 0.
-void patchLength(std::vector<std::byte>& b) {
+void patch_length(std::vector<std::byte>& b) {
     std::uint32_t len = static_cast<std::uint32_t>(b.size() - 4);
     b[0] = static_cast<std::byte>((len >> 24) & 0xFF);
     b[1] = static_cast<std::byte>((len >> 16) & 0xFF);
@@ -111,24 +111,24 @@ void patchLength(std::vector<std::byte>& b) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Announce
+// announce
 // ---------------------------------------------------------------------------
 
-std::vector<std::byte> encodeAnnounce(const Announce& a) {
+std::vector<std::byte> encode_announce(const announce& a) {
     std::vector<std::byte> b;
-    putU32(b, kAnnounceMagic);
-    putU8(b, a.protocolVersion);
-    putU8(b, a.flags);
-    putU16(b, a.tcpListenPort);
-    putId(b, a.nodeId);
-    putStr(b, a.groupName);
+    put_u32(b, kAnnounceMagic);
+    put_u8(b, a.protocolVersion);
+    put_u8(b, a.flags);
+    put_u16(b, a.tcpListenPort);
+    put_id(b, a.nodeId);
+    put_str(b, a.groupName);
     return b;
 }
 
-std::optional<Announce> decodeAnnounce(std::span<const std::byte> in) {
-    Reader r(in);
+std::optional<announce> decode_announce(std::span<const std::byte> in) {
+    reader r(in);
     if (r.u32() != kAnnounceMagic) return std::nullopt;
-    Announce a;
+    announce a;
     a.protocolVersion = r.u8();
     a.flags           = r.u8();
     a.tcpListenPort   = r.u16();
@@ -142,55 +142,55 @@ std::optional<Announce> decodeAnnounce(std::span<const std::byte> in) {
 // TCP frames
 // ---------------------------------------------------------------------------
 
-std::vector<std::byte> encodeHello(FrameType helloOrAck, const Hello& h) {
+std::vector<std::byte> encode_hello(frame_type helloOrAck, const hello& h) {
     std::vector<std::byte> b;
-    putU32(b, 0); // length placeholder
-    putU8(b, static_cast<std::uint8_t>(helloOrAck));
-    putId(b, h.nodeId);
-    putU8(b, h.protocolVersion);
-    putU16(b, h.tcpListenPort);
-    putStr(b, h.groupName);
-    putU64(b, h.nonce);
-    patchLength(b);
+    put_u32(b, 0); // length placeholder
+    put_u8(b, static_cast<std::uint8_t>(helloOrAck));
+    put_id(b, h.nodeId);
+    put_u8(b, h.protocolVersion);
+    put_u16(b, h.tcpListenPort);
+    put_str(b, h.groupName);
+    put_u64(b, h.nonce);
+    patch_length(b);
     return b;
 }
 
-std::vector<std::byte> encodeHeartbeat() {
+std::vector<std::byte> encode_heartbeat() {
     std::vector<std::byte> b;
-    putU32(b, 0);
-    putU8(b, static_cast<std::uint8_t>(FrameType::Heartbeat));
-    patchLength(b);
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::Heartbeat));
+    patch_length(b);
     return b;
 }
 
-std::vector<std::byte> encodeGoodbye() {
+std::vector<std::byte> encode_goodbye() {
     std::vector<std::byte> b;
-    putU32(b, 0);
-    putU8(b, static_cast<std::uint8_t>(FrameType::Goodbye));
-    patchLength(b);
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::Goodbye));
+    patch_length(b);
     return b;
 }
 
-std::vector<std::byte> encodeData(const PeerId& src, const PeerId& dst,
-                                  const MessageId& msgId, std::uint8_t ttl,
+std::vector<std::byte> encode_data(const peer_id& src, const peer_id& dst,
+                                  const message_id& msgId, std::uint8_t ttl,
                                   std::span<const std::byte> payload) {
     std::vector<std::byte> b;
     b.reserve(4 + 1 + 16 + 16 + 16 + 1 + 4 + payload.size());
-    putU32(b, 0);
-    putU8(b, static_cast<std::uint8_t>(FrameType::Data));
-    putId(b, src);
-    putId(b, dst);
-    putMsgId(b, msgId);
-    putU8(b, ttl);
-    putU32(b, static_cast<std::uint32_t>(payload.size()));
-    putBytes(b, payload.data(), payload.size());
-    patchLength(b);
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::Data));
+    put_id(b, src);
+    put_id(b, dst);
+    put_msg_id(b, msgId);
+    put_u8(b, ttl);
+    put_u32(b, static_cast<std::uint32_t>(payload.size()));
+    put_bytes(b, payload.data(), payload.size());
+    patch_length(b);
     return b;
 }
 
-DecodeStatus tryDecodeFrame(std::span<const std::byte> in, std::size_t maxMessageBytes,
-                            ParsedFrame& out, std::size_t& consumed) {
-    if (in.size() < 4) return DecodeStatus::NeedMore;
+decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMessageBytes,
+                            parsed_frame& out, std::size_t& consumed) {
+    if (in.size() < 4) return decode_status::NeedMore;
 
     // Peek the length prefix without consuming.
     std::uint32_t len = (static_cast<std::uint32_t>(in[0]) << 24) |
@@ -198,49 +198,49 @@ DecodeStatus tryDecodeFrame(std::span<const std::byte> in, std::size_t maxMessag
                         (static_cast<std::uint32_t>(in[2]) << 8) |
                         (static_cast<std::uint32_t>(in[3]));
 
-    if (len < 1) return DecodeStatus::Error;               // must hold at least frameType
-    if (len > maxMessageBytes) return DecodeStatus::Error;  // DoS guard
-    if (in.size() < 4 + static_cast<std::size_t>(len)) return DecodeStatus::NeedMore;
+    if (len < 1) return decode_status::Error;               // must hold at least frameType
+    if (len > maxMessageBytes) return decode_status::Error;  // DoS guard
+    if (in.size() < 4 + static_cast<std::size_t>(len)) return decode_status::NeedMore;
 
     // Body spans [4, 4+len).
-    Reader r(in.subspan(4, len));
-    auto type = static_cast<FrameType>(r.u8());
+    reader r(in.subspan(4, len));
+    auto type = static_cast<frame_type>(r.u8());
     out.type  = type;
 
     switch (type) {
-    case FrameType::Hello:
-    case FrameType::HelloAck: {
-        r.id(out.hello.nodeId);
-        out.hello.protocolVersion = r.u8();
-        out.hello.tcpListenPort   = r.u16();
-        out.hello.groupName       = r.str();
-        out.hello.nonce           = r.u64();
+    case frame_type::Hello:
+    case frame_type::HelloAck: {
+        r.id(out.hello_msg.nodeId);
+        out.hello_msg.protocolVersion = r.u8();
+        out.hello_msg.tcpListenPort   = r.u16();
+        out.hello_msg.groupName       = r.str();
+        out.hello_msg.nonce           = r.u64();
         break;
     }
-    case FrameType::Heartbeat:
-    case FrameType::Goodbye:
+    case frame_type::Heartbeat:
+    case frame_type::Goodbye:
         break;
-    case FrameType::Data: {
+    case frame_type::Data: {
         r.id(out.data.src);
         r.id(out.data.dst);
-        r.msgId(out.data.msgId);
+        r.msg_id(out.data.msgId);
         out.data.ttl            = r.u8();
         std::uint32_t plen      = r.u32();
         out.data.payload        = r.take(plen);
         break;
     }
     default:
-        return DecodeStatus::Error; // unknown frame type
+        return decode_status::Error; // unknown frame type
     }
 
-    if (!r.ok()) return DecodeStatus::Error;
+    if (!r.ok()) return decode_status::Error;
     consumed = 4 + len;
-    return DecodeStatus::Ok;
+    return decode_status::Ok;
 }
 
 } // namespace mm
 
-std::size_t std::hash<mm::MessageId>::operator()(const mm::MessageId& id) const noexcept {
+std::size_t std::hash<mm::message_id>::operator()(const mm::message_id& id) const noexcept {
     std::uint64_t h = 1469598103934665603ULL;
     for (std::byte b : id.bytes) {
         h ^= static_cast<std::uint64_t>(b);

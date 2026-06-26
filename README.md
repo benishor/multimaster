@@ -41,26 +41,26 @@ target_link_libraries(your_app PRIVATE multimaster::multimaster)
 #include <multimaster/multimaster.hpp>
 
 int main() {
-    mm::MeshConfig cfg;          // sensible LAN defaults
+    mm::mesh_config cfg;         // sensible LAN defaults
     cfg.groupName = "my-app";    // only nodes sharing a group join the same mesh
 
-    mm::Mesh mesh(cfg);
+    mm::mesh node(cfg);
 
-    mm::Callbacks cb;
-    cb.onPeerConnected = [](mm::PeerId p) { /* peer joined */ };
-    cb.onPeerLost      = [](mm::PeerId p) { /* peer gone   */ };
-    cb.onMessage       = [](mm::PeerId from, mm::Bytes data) {
+    mm::callbacks cb;
+    cb.onPeerConnected = [](mm::peer_id p) { /* peer joined */ };
+    cb.onPeerLost      = [](mm::peer_id p) { /* peer gone   */ };
+    cb.onMessage       = [](mm::peer_id from, mm::bytes data) {
         // `data` is valid only during this callback — copy to retain.
     };
-    mesh.setCallbacks(std::move(cb));
+    node.set_callbacks(std::move(cb));
 
-    mesh.start();                // binds sockets, spawns the IO thread
+    node.start();                // binds sockets, spawns the IO thread
 
     const char msg[] = "hello mesh";
-    mesh.broadcast(mm::Bytes(reinterpret_cast<const std::byte*>(msg), sizeof msg));
+    node.broadcast(mm::bytes(reinterpret_cast<const std::byte*>(msg), sizeof msg));
 
     // ... run your app ...
-    mesh.stop();                 // also called by ~Mesh (RAII)
+    node.stop();                 // also called by ~mesh (RAII)
 }
 ```
 
@@ -73,11 +73,11 @@ All public headers live under [`include/multimaster/`](include/multimaster):
 
 | Header            | Contents                                                       |
 |-------------------|----------------------------------------------------------------|
-| `mesh.hpp`        | `Mesh` — the node facade (start/stop, broadcast/send, peers).   |
-| `config.hpp`      | `MeshConfig`, `SeedPeer` — all tunables.                        |
-| `events.hpp`      | `Callbacks`, `Error`, `ErrorCategory`.                          |
-| `peer_id.hpp`     | `PeerId` — 128-bit node id.                                     |
-| `span.hpp`        | `Bytes` = `std::span<const std::byte>`.                         |
+| `mesh.hpp`        | `mesh` — the node facade (start/stop, broadcast/send, peers).   |
+| `config.hpp`      | `mesh_config`, `seed_peer` — all tunables.                      |
+| `events.hpp`      | `callbacks`, `error`, `error_category`.                         |
+| `peer_id.hpp`     | `peer_id` — 128-bit node id.                                    |
+| `span.hpp`        | `bytes` = `std::span<const std::byte>`.                         |
 | `multimaster.hpp` | umbrella header.                                                |
 
 ### Threading contract
@@ -85,7 +85,7 @@ All public headers live under [`include/multimaster/`](include/multimaster):
 `broadcast`, `send`, and the introspection accessors are thread-safe and callable
 from any thread. **All callbacks run on the mesh's single internal IO thread**,
 serialized — never concurrently. Callbacks must not block; they may call
-`broadcast`/`send`. The `Bytes` handed to `onMessage` is valid only for the
+`broadcast`/`send`. The `bytes` handed to `onMessage` is valid only for the
 duration of that callback.
 
 ### Delivery semantics
@@ -97,7 +97,7 @@ you need reliability or ordering, layer it on top of the opaque payload.
 ## When multicast isn't available
 
 In containers or on some Wi-Fi networks multicast may be blocked. Set
-`MeshConfig::seedPeers` to a static list of `{host, port}` entries; nodes will
+`mesh_config::seedPeers` to a static list of `{host, port}` entries; nodes will
 dial those directly in addition to (or instead of) multicast discovery.
 
 ## Notes & limits

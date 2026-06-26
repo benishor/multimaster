@@ -11,29 +11,29 @@
 
 namespace mm {
 
-class MeshImpl; // pimpl; keeps <sys/epoll.h> and sockets out of the public ABI
+class mesh_impl; // pimpl; keeps <sys/epoll.h> and sockets out of the public ABI
 
 /// A node in a decentralized LAN mesh.
 ///
-/// Lifecycle: construct with a MeshConfig, optionally setCallbacks(), then
+/// Lifecycle: construct with a mesh_config, optionally set_callbacks(), then
 /// start(). start() spawns a single internal IO thread that owns all sockets.
 /// stop() (also called by the destructor) shuts that thread down gracefully.
 ///
-/// All send methods and introspection accessors are thread-safe. Callbacks run
-/// on the IO thread — see Callbacks for the full contract.
-class Mesh {
+/// All send methods and introspection accessors are thread-safe. callbacks run
+/// on the IO thread — see callbacks for the full contract.
+class mesh {
 public:
-    explicit Mesh(MeshConfig cfg);
-    ~Mesh();
+    explicit mesh(mesh_config cfg);
+    ~mesh();
 
-    Mesh(Mesh&&) noexcept;
-    Mesh& operator=(Mesh&&) noexcept;
-    Mesh(const Mesh&)            = delete;
-    Mesh& operator=(const Mesh&) = delete;
+    mesh(mesh&&) noexcept;
+    mesh& operator=(mesh&&) noexcept;
+    mesh(const mesh&)            = delete;
+    mesh& operator=(const mesh&) = delete;
 
     /// Install event handlers. Must be called before start(); changing
     /// callbacks on a running mesh is not supported.
-    void setCallbacks(Callbacks cb);
+    void set_callbacks(callbacks cb);
 
     /// Bind sockets and spawn the IO thread. Throws std::system_error on bind
     /// failure. Idempotent: a second call while running is a no-op.
@@ -45,25 +45,25 @@ public:
     /// rather than self-joining.
     void stop();
 
-    [[nodiscard]] bool isRunning() const noexcept;
+    [[nodiscard]] bool is_running() const noexcept;
 
     /// Flood opaque bytes to the entire mesh. Thread-safe; copies the payload.
-    void broadcast(Bytes data);
+    void broadcast(bytes data);
 
     /// Deliver opaque bytes to a specific node (relayed across the mesh if not
     /// directly connected). Thread-safe; copies the payload.
-    void send(PeerId dst, Bytes data);
+    void send(peer_id dst, bytes data);
 
-    [[nodiscard]] PeerId   id() const noexcept;
+    [[nodiscard]] peer_id   id() const noexcept;
     /// The actual bound TCP port (meaningful after start(), resolves ephemeral).
-    [[nodiscard]] uint16_t listenPort() const noexcept;
+    [[nodiscard]] uint16_t listen_port() const noexcept;
 
     /// Non-blocking snapshots of mesh state.
-    [[nodiscard]] std::vector<PeerId> connectedPeers() const;
-    [[nodiscard]] std::vector<PeerId> knownPeers() const;
+    [[nodiscard]] std::vector<peer_id> connected_peers() const;
+    [[nodiscard]] std::vector<peer_id> known_peers() const;
 
 private:
-    std::unique_ptr<MeshImpl> impl_;
+    std::unique_ptr<mesh_impl> impl_;
 };
 
 } // namespace mm

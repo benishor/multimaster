@@ -13,7 +13,7 @@ namespace mm {
 ///
 /// Storage is compacted lazily when the consumed prefix grows large, keeping
 /// amortized cost low without churning on every consume().
-class Buffer {
+class buffer {
 public:
     [[nodiscard]] std::size_t size() const noexcept { return data_.size() - head_; }
     [[nodiscard]] bool        empty() const noexcept { return size() == 0; }
@@ -30,7 +30,7 @@ public:
     /// Reserve `n` bytes of writable tail space and return a pointer to it; the
     /// caller must call commit() with how many were actually filled. Used to
     /// read() directly into the buffer without a bounce copy.
-    [[nodiscard]] std::byte* reserveTail(std::size_t n) {
+    [[nodiscard]] std::byte* reserve_tail(std::size_t n) {
         const std::size_t end = data_.size();
         data_.resize(end + n);
         return data_.data() + end;

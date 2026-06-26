@@ -9,28 +9,28 @@
 
 namespace mm {
 
-Discovery::Discovery(EventLoop& loop, const MeshConfig& cfg, const LocalIdentity& self,
-                     DiscoverFn onDiscover, ErrorFn onError)
+discovery::discovery(event_loop& loop, const mesh_config& cfg, const local_identity& self,
+                     discover_fn onDiscover, error_fn onError)
     : loop_(loop), cfg_(cfg), self_(self), onDiscover_(std::move(onDiscover)),
       onError_(std::move(onError)), rng_(std::random_device{}()) {}
 
-Discovery::~Discovery() {
+discovery::~discovery() {
     if (sock_.valid()) loop_.del(sock_.get());
 }
 
-void Discovery::start() {
+void discovery::start() {
     auto report = [&](const char* what) {
-        if (onError_) onError_({ErrorCategory::Discovery, errno, what, std::nullopt});
+        if (onError_) onError_({error_category::Discovery, errno, what, std::nullopt});
     };
 
-    sock_ = Socket::udp();
+    sock_ = socket::udp();
     if (!sock_.valid()) { report("multicast socket()"); return; }
-    (void)sock_.setReuseAddr();
-    (void)sock_.setReusePort(); // allow multiple nodes on one host (and tests)
+    (void)sock_.set_reuse_addr();
+    (void)sock_.set_reuse_port(); // allow multiple nodes on one host (and tests)
 
     // Bind to the multicast port on any interface.
     sockaddr_in bindAddr{};
-    if (!makeAddr("0.0.0.0", cfg_.multicastPort, bindAddr) ||
+    if (!make_addr("0.0.0.0", cfg_.multicastPort, bindAddr) ||
         ::bind(sock_.get(), reinterpret_cast<sockaddr*>(&bindAddr), sizeof bindAddr) != 0) {
         report("multicast bind()");
         return;
@@ -64,7 +64,7 @@ void Discovery::start() {
         ::setsockopt(sock_.get(), IPPROTO_IP, IP_MULTICAST_IF, &iface, sizeof iface);
     }
 
-    if (!makeAddr(cfg_.multicastAddr, cfg_.multicastPort, groupAddr_)) {
+    if (!make_addr(cfg_.multicastAddr, cfg_.multicastPort, groupAddr_)) {
         report("bad multicast dest");
         return;
     }
@@ -72,35 +72,35 @@ void Discovery::start() {
     if (!loop_.add(sock_.get(), EPOLLIN, this)) { report("multicast epoll add"); return; }
 
     usable_ = true;
-    announce();          // announce immediately on startup
-    scheduleAnnounce();  // then periodically
+    send_announce();          // announce immediately on startup
+    schedule_announce();  // then periodically
 }
 
-void Discovery::announce() {
+void discovery::send_announce() {
     if (!usable_) return;
-    Announce a;
+    announce a;
     a.protocolVersion = self_.protocolVersion;
     a.flags           = 0;
     a.tcpListenPort   = self_.listenPort;
     a.nodeId          = self_.nodeId;
     a.groupName       = self_.groupName;
-    auto dat = encodeAnnounce(a);
+    auto dat = encode_announce(a);
     ::sendto(sock_.get(), dat.data(), dat.size(), 0,
              reinterpret_cast<sockaddr*>(&groupAddr_), sizeof groupAddr_);
 }
 
-void Discovery::scheduleAnnounce() {
+void discovery::schedule_announce() {
     // Jitter ±20% to avoid mesh-wide announce synchronization.
     auto base = cfg_.announceInterval;
     std::uniform_int_distribution<long long> jit(-base.count() / 5, base.count() / 5);
     auto delay = base + std::chrono::milliseconds(jit(rng_));
-    loop_.addTimer(delay, [this] {
-        announce();
-        scheduleAnnounce();
+    loop_.add_timer(delay, [this] {
+        send_announce();
+        schedule_announce();
     });
 }
 
-void Discovery::onIoEvents(std::uint32_t events) {
+void discovery::on_io_events(std::uint32_t events) {
     if (!(events & EPOLLIN)) return;
     std::array<std::byte, 2048> buf{};
     for (;;) {
@@ -112,7 +112,7 @@ void Discovery::onIoEvents(std::uint32_t events) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) break;
             break;
         }
-        auto a = decodeAnnounce(std::span<const std::byte>(buf.data(), static_cast<std::size_t>(n)));
+        auto a = decode_announce(std::span<const std::byte>(buf.data(), static_cast<std::size_t>(n)));
         if (!a) continue;
         if (a->protocolVersion != self_.protocolVersion) continue;
         if (a->groupName != self_.groupName) continue;

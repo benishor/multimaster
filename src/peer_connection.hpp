@@ -15,116 +15,116 @@
 
 namespace mm {
 
-/// Identity this node advertises to peers in its Hello.
-struct LocalIdentity {
-    PeerId        nodeId;
+/// Identity this node advertises to peers in its hello.
+struct local_identity {
+    peer_id        nodeId;
     std::string   groupName;
     std::uint8_t  protocolVersion = 1;
     std::uint16_t listenPort      = 0;
 };
 
-class PeerConnection;
+class peer_connection;
 
-/// Events surfaced by a PeerConnection to its owner (PeerManager). All are
+/// Events surfaced by a peer_connection to its owner (peer_manager). All are
 /// invoked on the IO thread.
-class ConnectionListener {
+class connection_listener {
 public:
-    virtual ~ConnectionListener() = default;
+    virtual ~connection_listener() = default;
 
     /// Handshake validated (group/version matched). `inbound` is true if this
     /// node accepted the connection, false if it dialed out.
-    virtual void onPeerHandshake(PeerConnection& c, const Hello& peer) = 0;
+    virtual void on_peer_handshake(peer_connection& c, const hello& peer) = 0;
 
     /// A Data frame arrived. `view.payload` is valid only for this call.
-    virtual void onPeerData(PeerConnection& c, const DataView& view) = 0;
+    virtual void on_peer_data(peer_connection& c, const data_view& view) = 0;
 
     /// The connection finished (peer closed, error, protocol violation, or
     /// Goodbye). The owner must arrange deferred reaping of `c`.
-    virtual void onPeerClosed(PeerConnection& c) = 0;
+    virtual void on_peer_closed(peer_connection& c) = 0;
 
-    virtual void reportError(const Error& e) = 0;
+    virtual void report_error(const error& e) = 0;
 };
 
 /// One TCP connection to a peer. Owns its socket and drives framed, partial
-/// reads/writes plus the Hello handshake. Registered with the EventLoop as an
-/// IoHandler. Never deletes itself — closure routes through
-/// ConnectionListener::onPeerClosed so the owner can reap after the event batch.
-class PeerConnection : public IoHandler {
+/// reads/writes plus the hello handshake. Registered with the event_loop as an
+/// io_handler. Never deletes itself — closure routes through
+/// connection_listener::onPeerClosed so the owner can reap after the event batch.
+class peer_connection : public io_handler {
 public:
-    enum class State { ConnectingOut, Handshaking, Established, Dead };
+    enum class conn_state { ConnectingOut, Handshaking, Established, Dead };
 
     /// Construct around an already-connected, accepted socket (inbound).
-    PeerConnection(EventLoop& loop, ConnectionListener& listener,
-                   const MeshConfig& cfg, const LocalIdentity& self,
-                   Socket sock, const sockaddr_in& peerAddr, std::uint64_t nonce);
+    peer_connection(event_loop& loop, connection_listener& listener,
+                   const mesh_config& cfg, const local_identity& self,
+                   socket sock, const sockaddr_in& peerAddr, std::uint64_t nonce);
 
-    /// Construct for an outbound dial; call startConnect() afterwards.
-    PeerConnection(EventLoop& loop, ConnectionListener& listener,
-                   const MeshConfig& cfg, const LocalIdentity& self,
+    /// Construct for an outbound dial; call start_connect() afterwards.
+    peer_connection(event_loop& loop, connection_listener& listener,
+                   const mesh_config& cfg, const local_identity& self,
                    const sockaddr_in& target, std::uint64_t nonce);
 
-    ~PeerConnection() override;
+    ~peer_connection() override;
 
     /// Begin a nonblocking connect (outbound only). Returns false if the socket
     /// or connect() failed outright (the connection is then Dead).
-    bool startConnect();
+    bool start_connect();
 
-    void onIoEvents(std::uint32_t events) override;
+    void on_io_events(std::uint32_t events) override;
 
     /// Enqueue an already-encoded frame for transmission (gossip forwarding).
-    void sendRaw(std::span<const std::byte> frame);
+    void send_raw(std::span<const std::byte> frame);
 
     /// Send a Heartbeat if the link is idle (used by the liveness tick).
-    void maybeHeartbeat(EventLoop::Clock::time_point now,
+    void maybe_heartbeat(event_loop::clock::time_point now,
                         std::chrono::milliseconds interval);
 
     /// Queue a Goodbye then mark for closure.
-    void closeGracefully();
+    void close_gracefully();
 
     // --- accessors ----------------------------------------------------------
-    [[nodiscard]] State                       state() const noexcept { return state_; }
+    [[nodiscard]] conn_state                       state() const noexcept { return state_; }
     [[nodiscard]] bool                        inbound() const noexcept { return inbound_; }
-    [[nodiscard]] const PeerId&               peerId() const noexcept { return peerId_; }
-    [[nodiscard]] std::uint16_t               peerListenPort() const noexcept { return peerListenPort_; }
-    [[nodiscard]] std::uint64_t               localNonce() const noexcept { return localNonce_; }
-    [[nodiscard]] std::uint64_t               peerNonce() const noexcept { return peerNonce_; }
+    [[nodiscard]] const peer_id&               id() const noexcept { return peerId_; }
+    [[nodiscard]] std::uint16_t               peer_listen_port() const noexcept { return peerListenPort_; }
+    [[nodiscard]] std::uint64_t               local_nonce() const noexcept { return localNonce_; }
+    [[nodiscard]] std::uint64_t               peer_nonce() const noexcept { return peerNonce_; }
     [[nodiscard]] int                         fd() const noexcept { return sock_.get(); }
-    [[nodiscard]] const sockaddr_in&          peerAddr() const noexcept { return peerAddr_; }
-    [[nodiscard]] EventLoop::Clock::time_point lastRecv() const noexcept { return lastRecv_; }
-    [[nodiscard]] EventLoop::Clock::time_point createdAt() const noexcept { return createdAt_; }
+    [[nodiscard]] const sockaddr_in&          peer_addr() const noexcept { return peerAddr_; }
+    [[nodiscard]] event_loop::clock::time_point last_recv() const noexcept { return lastRecv_; }
+    [[nodiscard]] event_loop::clock::time_point created_at() const noexcept { return createdAt_; }
 
 private:
-    void sendHello();
-    void onConnectComplete();
-    void doRead();
-    void parseInbound();
-    void flushOutbound();
-    void updateEpoll();
-    void fail(ErrorCategory cat, int err, std::string what);
-    void markDead();
+    void send_hello();
+    void on_connect_complete();
+    void do_read();
+    void parse_inbound();
+    void flush_outbound();
+    void update_epoll();
+    void fail(error_category cat, int err, std::string what);
+    void mark_dead();
 
-    EventLoop&          loop_;
-    ConnectionListener& listener_;
-    const MeshConfig&   cfg_;
-    const LocalIdentity& self_;
+    event_loop&          loop_;
+    connection_listener& listener_;
+    const mesh_config&   cfg_;
+    const local_identity& self_;
 
-    Socket      sock_;
+    socket      sock_;
     sockaddr_in peerAddr_{};
     bool        inbound_ = false;
-    State       state_   = State::Handshaking;
+    conn_state       state_   = conn_state::Handshaking;
 
-    PeerId        peerId_;
+    peer_id        peerId_;
     std::uint16_t peerListenPort_ = 0;
     std::uint64_t localNonce_     = 0;
     std::uint64_t peerNonce_      = 0;
 
-    Buffer in_;
-    Buffer out_;
+    buffer in_;
+    buffer out_;
     bool   wantWrite_ = false; // EPOLLOUT currently armed?
 
-    EventLoop::Clock::time_point createdAt_;
-    EventLoop::Clock::time_point lastRecv_;
-    EventLoop::Clock::time_point lastSend_;
+    event_loop::clock::time_point createdAt_;
+    event_loop::clock::time_point lastRecv_;
+    event_loop::clock::time_point lastSend_;
 
     bool registered_ = false;
     bool dead_       = false;

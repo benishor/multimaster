@@ -1,7 +1,7 @@
 #pragma once
 
 #include "event_loop.hpp"
-#include "peer_connection.hpp" // LocalIdentity
+#include "peer_connection.hpp" // local_identity
 #include "socket.hpp"
 #include "wire.hpp"
 #include "multimaster/config.hpp"
@@ -14,36 +14,36 @@
 
 namespace mm {
 
-/// Periodically multicasts an Announce datagram and listens for peers' announces
+/// Periodically multicasts an announce datagram and listens for peers' announces
 /// on the multicast group. Discovered peers (other than self) are surfaced via
 /// the discover callback together with the datagram's source address.
-class Discovery : public IoHandler {
+class discovery : public io_handler {
 public:
-    using DiscoverFn = std::function<void(const Announce&, const sockaddr_in& src)>;
-    using ErrorFn    = std::function<void(const Error&)>;
+    using discover_fn = std::function<void(const announce&, const sockaddr_in& src)>;
+    using error_fn    = std::function<void(const error&)>;
 
-    Discovery(EventLoop& loop, const MeshConfig& cfg, const LocalIdentity& self,
-              DiscoverFn onDiscover, ErrorFn onError);
-    ~Discovery() override;
+    discovery(event_loop& loop, const mesh_config& cfg, const local_identity& self,
+              discover_fn onDiscover, error_fn onError);
+    ~discovery() override;
 
     /// Set up the multicast socket and begin announcing. Reports (but tolerates)
     /// failures via the error callback rather than throwing, so a node can still
     /// run with seed peers when multicast is unavailable.
     void start();
 
-    void onIoEvents(std::uint32_t events) override;
+    void on_io_events(std::uint32_t events) override;
 
 private:
-    void announce();
-    void scheduleAnnounce();
+    void send_announce();
+    void schedule_announce();
 
-    EventLoop&           loop_;
-    const MeshConfig&    cfg_;
-    const LocalIdentity& self_;
-    DiscoverFn           onDiscover_;
-    ErrorFn              onError_;
+    event_loop&           loop_;
+    const mesh_config&    cfg_;
+    const local_identity& self_;
+    discover_fn           onDiscover_;
+    error_fn              onError_;
 
-    Socket      sock_;
+    socket      sock_;
     sockaddr_in groupAddr_{}; // destination for outbound announces
     bool        usable_ = false;
 

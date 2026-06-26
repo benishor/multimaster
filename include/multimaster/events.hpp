@@ -9,7 +9,7 @@
 
 namespace mm {
 
-enum class ErrorCategory {
+enum class error_category {
     Socket,       // a syscall on a socket failed
     Protocol,     // a peer sent something malformed / oversized
     Discovery,    // multicast setup or send/recv failure
@@ -20,41 +20,41 @@ enum class ErrorCategory {
 /// Non-fatal error notification. The mesh keeps running; this is informational
 /// (and useful for logging). `peer` is set when the error is attributable to a
 /// specific connection.
-struct Error {
-    ErrorCategory         category;
+struct error {
+    error_category         category;
     int                   sysErrno; // errno at point of failure, or 0
     std::string           what;
-    std::optional<PeerId> peer;
+    std::optional<peer_id> peer;
 };
 
 /// The complete set of mesh event callbacks. Any field may be left empty.
 ///
 /// THREADING: every callback is invoked on the mesh's single internal IO
-/// thread, serialized (never concurrently with each other). Callbacks must not
-/// block. They MAY call Mesh::broadcast / Mesh::send. They must NOT call a
-/// blocking Mesh::stop() from within (that is detected and handled, but avoid
-/// it). See Span.hpp for the lifetime rule on the Bytes passed to onMessage.
-struct Callbacks {
+/// thread, serialized (never concurrently with each other). callbacks must not
+/// block. They MAY call mesh::broadcast / mesh::send. They must NOT call a
+/// blocking mesh::stop() from within (that is detected and handled, but avoid
+/// it). See Span.hpp for the lifetime rule on the bytes passed to onMessage.
+struct callbacks {
     /// A peer was learned via multicast/seed, before any TCP connection.
-    std::function<void(PeerId)> onPeerDiscovered;
+    std::function<void(peer_id)> onPeerDiscovered;
 
     /// TCP connection up and handshake completed; the peer is now usable.
-    std::function<void(PeerId)> onPeerConnected;
+    std::function<void(peer_id)> onPeerConnected;
 
     /// An established connection dropped. The peer may still be on the LAN and
     /// reconnection will be attempted.
-    std::function<void(PeerId)> onPeerDisconnected;
+    std::function<void(peer_id)> onPeerDisconnected;
 
     /// The peer stopped announcing and is considered gone; reconnection has
     /// ceased and routing state for it was pruned.
-    std::function<void(PeerId)> onPeerLost;
+    std::function<void(peer_id)> onPeerLost;
 
     /// Application data addressed to (or broadcast to) this node. `from` is the
     /// original sender, not necessarily a directly-connected neighbor.
-    std::function<void(PeerId /*from*/, Bytes)> onMessage;
+    std::function<void(peer_id /*from*/, bytes)> onMessage;
 
     /// Non-fatal error notification.
-    std::function<void(const Error&)> onError;
+    std::function<void(const error&)> onError;
 };
 
 } // namespace mm

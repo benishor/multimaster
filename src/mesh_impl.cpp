@@ -4,40 +4,40 @@
 
 namespace mm {
 
-MeshImpl::MeshImpl(MeshConfig cfg)
+mesh_impl::mesh_impl(mesh_config cfg)
     : cfg_(std::move(cfg)),
-      connectedSnap_(std::make_shared<std::vector<PeerId>>()),
-      knownSnap_(std::make_shared<std::vector<PeerId>>()) {
+      connectedSnap_(std::make_shared<std::vector<peer_id>>()),
+      knownSnap_(std::make_shared<std::vector<peer_id>>()) {
     self_.nodeId          = cfg_.nodeId;
     self_.groupName       = cfg_.groupName;
     self_.protocolVersion = cfg_.protocolVersion;
     self_.listenPort      = cfg_.listenPort; // refined after bind
 }
 
-MeshImpl::~MeshImpl() { stop(); }
+mesh_impl::~mesh_impl() { stop(); }
 
-void MeshImpl::setCallbacks(Callbacks cb) { cb_ = std::move(cb); }
+void mesh_impl::set_callbacks(callbacks cb) { cb_ = std::move(cb); }
 
-void MeshImpl::start() {
+void mesh_impl::start() {
     bool expected = false;
     if (!started_.compare_exchange_strong(expected, true)) return; // already started
 
-    peers_ = std::make_unique<PeerManager>(loop_, cfg_, self_, *this);
+    peers_ = std::make_unique<peer_manager>(loop_, cfg_, self_, *this);
 
     // Bind the TCP listener first so we can advertise the resolved port.
-    listener_ = std::make_unique<Listener>(loop_, [this](Socket s, const sockaddr_in& a) {
-        peers_->acceptConnection(std::move(s), a);
+    listener_ = std::make_unique<listener>(loop_, [this](socket s, const sockaddr_in& a) {
+        peers_->accept_connection(std::move(s), a);
     });
     listener_->start(cfg_.bindAddr, cfg_.listenPort); // throws on failure
-    self_.listenPort = listener_->boundPort();
+    self_.listenPort = listener_->bound_port();
     listenPort_.store(self_.listenPort);
 
-    discovery_ = std::make_unique<Discovery>(
+    discovery_ = std::make_unique<discovery>(
         loop_, cfg_, self_,
-        [this](const Announce& a, const sockaddr_in& src) { peers_->onDiscovered(a, src); },
-        [this](const Error& e) { error(e); });
+        [this](const announce& a, const sockaddr_in& src) { peers_->on_discovered(a, src); },
+        [this](const error& e) { on_error(e); });
 
-    loop_.setWakeHandler([this] { drainMailbox(); });
+    loop_.set_wake_handler([this] { drain_mailbox(); });
 
     // All registration/timers happen before the loop runs (no concurrency yet).
     peers_->start();
@@ -50,7 +50,7 @@ void MeshImpl::start() {
     });
 }
 
-void MeshImpl::stop() {
+void mesh_impl::stop() {
     if (!started_.load()) return;
     if (!running_.exchange(false)) {
         // Not running but thread may still be joinable (e.g. stopped from a
@@ -62,7 +62,7 @@ void MeshImpl::stop() {
     }
 
     // Ask the IO thread to gracefully shut the mesh down and exit run().
-    post(Command{Command::Type::Stop, {}, {}});
+    post(command{command::kind::Stop, {}, {}});
 
     if (std::this_thread::get_id() == ioThreadId_) {
         // Called from within a callback: cannot self-join. The thread will exit
@@ -72,7 +72,7 @@ void MeshImpl::stop() {
     if (ioThread_.joinable()) ioThread_.join();
 }
 
-void MeshImpl::post(Command&& c) {
+void mesh_impl::post(command&& c) {
     {
         std::lock_guard lk(mailboxMu_);
         mailbox_.push_back(std::move(c));
@@ -80,8 +80,8 @@ void MeshImpl::post(Command&& c) {
     loop_.wakeup();
 }
 
-void MeshImpl::drainMailbox() {
-    std::deque<Command> cmds;
+void mesh_impl::drain_mailbox() {
+    std::deque<command> cmds;
     {
         std::lock_guard lk(mailboxMu_);
         cmds.swap(mailbox_);
@@ -89,13 +89,13 @@ void MeshImpl::drainMailbox() {
     bool stopRequested = false;
     for (auto& c : cmds) {
         switch (c.type) {
-        case Command::Type::Broadcast:
-            peers_->originateBroadcast(Bytes(c.payload.data(), c.payload.size()));
+        case command::kind::Broadcast:
+            peers_->originate_broadcast(bytes(c.payload.data(), c.payload.size()));
             break;
-        case Command::Type::Targeted:
-            peers_->originateTargeted(c.dst, Bytes(c.payload.data(), c.payload.size()));
+        case command::kind::Targeted:
+            peers_->originate_targeted(c.dst, bytes(c.payload.data(), c.payload.size()));
             break;
-        case Command::Type::Stop:
+        case command::kind::Stop:
             stopRequested = true;
             break;
         }
@@ -106,22 +106,22 @@ void MeshImpl::drainMailbox() {
     }
 }
 
-void MeshImpl::broadcast(Bytes data) {
+void mesh_impl::broadcast(bytes data) {
     if (!running_.load()) return;
-    Command c{Command::Type::Broadcast, {}, {}};
+    command c{command::kind::Broadcast, {}, {}};
     c.payload.assign(data.begin(), data.end());
     post(std::move(c));
 }
 
-void MeshImpl::send(const PeerId& dst, Bytes data) {
+void mesh_impl::send(const peer_id& dst, bytes data) {
     if (!running_.load()) return;
-    Command c{Command::Type::Targeted, dst, {}};
+    command c{command::kind::Targeted, dst, {}};
     c.payload.assign(data.begin(), data.end());
     post(std::move(c));
 }
 
-std::vector<PeerId> MeshImpl::connectedPeers() const {
-    std::shared_ptr<const std::vector<PeerId>> snap;
+std::vector<peer_id> mesh_impl::connected_peers() const {
+    std::shared_ptr<const std::vector<peer_id>> snap;
     {
         std::lock_guard lk(snapMu_);
         snap = connectedSnap_;
@@ -129,8 +129,8 @@ std::vector<PeerId> MeshImpl::connectedPeers() const {
     return *snap;
 }
 
-std::vector<PeerId> MeshImpl::knownPeers() const {
-    std::shared_ptr<const std::vector<PeerId>> snap;
+std::vector<peer_id> mesh_impl::known_peers() const {
+    std::shared_ptr<const std::vector<peer_id>> snap;
     {
         std::lock_guard lk(snapMu_);
         snap = knownSnap_;
@@ -138,33 +138,33 @@ std::vector<PeerId> MeshImpl::knownPeers() const {
     return *snap;
 }
 
-// --- PeerManagerDelegate (all invoked on the IO thread) ---------------------
+// --- peer_manager_delegate (all invoked on the IO thread) ---------------------
 
-void MeshImpl::peerDiscovered(const PeerId& id) {
+void mesh_impl::peer_discovered(const peer_id& id) {
     if (cb_.onPeerDiscovered) cb_.onPeerDiscovered(id);
 }
-void MeshImpl::peerConnected(const PeerId& id) {
+void mesh_impl::peer_connected(const peer_id& id) {
     if (cb_.onPeerConnected) cb_.onPeerConnected(id);
 }
-void MeshImpl::peerDisconnected(const PeerId& id) {
+void mesh_impl::peer_disconnected(const peer_id& id) {
     if (cb_.onPeerDisconnected) cb_.onPeerDisconnected(id);
 }
-void MeshImpl::peerLost(const PeerId& id) {
+void mesh_impl::peer_lost(const peer_id& id) {
     if (cb_.onPeerLost) cb_.onPeerLost(id);
 }
-void MeshImpl::messageReceived(const PeerId& from, Bytes payload) {
+void mesh_impl::message_received(const peer_id& from, bytes payload) {
     if (cb_.onMessage) cb_.onMessage(from, payload);
 }
-void MeshImpl::error(const Error& e) {
+void mesh_impl::on_error(const error& e) {
     if (cb_.onError) cb_.onError(e);
 }
-void MeshImpl::connectedSnapshot(std::vector<PeerId> v) {
-    auto sp = std::make_shared<const std::vector<PeerId>>(std::move(v));
+void mesh_impl::connected_snapshot(std::vector<peer_id> v) {
+    auto sp = std::make_shared<const std::vector<peer_id>>(std::move(v));
     std::lock_guard lk(snapMu_);
     connectedSnap_ = std::move(sp);
 }
-void MeshImpl::knownSnapshot(std::vector<PeerId> v) {
-    auto sp = std::make_shared<const std::vector<PeerId>>(std::move(v));
+void mesh_impl::known_snapshot(std::vector<peer_id> v) {
+    auto sp = std::make_shared<const std::vector<peer_id>>(std::move(v));
     std::lock_guard lk(snapMu_);
     knownSnap_ = std::move(sp);
 }

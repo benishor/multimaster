@@ -13,38 +13,38 @@
 #include <string>
 
 namespace {
-mm::Bytes asBytes(const std::string& s) {
-    return mm::Bytes(reinterpret_cast<const std::byte*>(s.data()), s.size());
+mm::bytes as_bytes(const std::string& s) {
+    return mm::bytes(reinterpret_cast<const std::byte*>(s.data()), s.size());
 }
-std::string toStr(mm::Bytes b) {
+std::string to_str(mm::bytes b) {
     return std::string(reinterpret_cast<const char*>(b.data()), b.size());
 }
 } // namespace
 
 int main(int argc, char** argv) {
-    mm::MeshConfig cfg;
+    mm::mesh_config cfg;
     if (argc > 1) cfg.groupName = argv[1];
 
-    mm::Mesh mesh(cfg);
+    mm::mesh mesh(cfg);
 
-    mm::Callbacks cb;
-    cb.onPeerConnected    = [](mm::PeerId p) { std::cout << "[+ connected]    " << p.toString() << "\n"; };
-    cb.onPeerDisconnected = [](mm::PeerId p) { std::cout << "[- disconnected] " << p.toString() << "\n"; };
-    cb.onPeerLost         = [](mm::PeerId p) { std::cout << "[x lost]         " << p.toString() << "\n"; };
-    cb.onMessage          = [](mm::PeerId from, mm::Bytes data) {
-        std::cout << from.toString().substr(0, 8) << "> " << toStr(data) << "\n";
+    mm::callbacks cb;
+    cb.onPeerConnected    = [](mm::peer_id p) { std::cout << "[+ connected]    " << p.to_string() << "\n"; };
+    cb.onPeerDisconnected = [](mm::peer_id p) { std::cout << "[- disconnected] " << p.to_string() << "\n"; };
+    cb.onPeerLost         = [](mm::peer_id p) { std::cout << "[x lost]         " << p.to_string() << "\n"; };
+    cb.onMessage          = [](mm::peer_id from, mm::bytes data) {
+        std::cout << from.to_string().substr(0, 8) << "> " << to_str(data) << "\n";
     };
-    cb.onError = [](const mm::Error& e) { std::cerr << "[error] " << e.what << "\n"; };
-    mesh.setCallbacks(std::move(cb));
+    cb.onError = [](const mm::error& e) { std::cerr << "[error] " << e.what << "\n"; };
+    mesh.set_callbacks(std::move(cb));
 
     mesh.start();
-    std::cout << "this node: " << mesh.id().toString() << "  port: " << mesh.listenPort()
+    std::cout << "this node: " << mesh.id().to_string() << "  port: " << mesh.listen_port()
               << "  group: " << cfg.groupName << "\n";
     std::cout << "type messages and press enter (Ctrl-D to quit)\n";
 
     std::string line;
     while (std::getline(std::cin, line)) {
-        mesh.broadcast(asBytes(line));
+        mesh.broadcast(as_bytes(line));
     }
 
     mesh.stop();

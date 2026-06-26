@@ -3,7 +3,7 @@
 #include "discovery.hpp"
 #include "event_loop.hpp"
 #include "listener.hpp"
-#include "peer_connection.hpp" // LocalIdentity
+#include "peer_connection.hpp" // local_identity
 #include "peer_manager.hpp"
 #include "multimaster/config.hpp"
 #include "multimaster/events.hpp"
@@ -19,56 +19,56 @@
 
 namespace mm {
 
-/// The full mesh node implementation, hidden behind the Mesh pimpl. Owns the
-/// IO thread and all subsystems; implements PeerManagerDelegate to bridge
-/// internal events to the user's Callbacks and to maintain thread-safe
+/// The full mesh node implementation, hidden behind the mesh pimpl. Owns the
+/// IO thread and all subsystems; implements peer_manager_delegate to bridge
+/// internal events to the user's callbacks and to maintain thread-safe
 /// snapshots of mesh state.
-class MeshImpl : public PeerManagerDelegate {
+class mesh_impl : public peer_manager_delegate {
 public:
-    explicit MeshImpl(MeshConfig cfg);
-    ~MeshImpl() override;
+    explicit mesh_impl(mesh_config cfg);
+    ~mesh_impl() override;
 
-    void setCallbacks(Callbacks cb);
+    void set_callbacks(callbacks cb);
     void start();
     void stop();
-    [[nodiscard]] bool isRunning() const noexcept { return running_.load(); }
+    [[nodiscard]] bool is_running() const noexcept { return running_.load(); }
 
-    void broadcast(Bytes data);
-    void send(const PeerId& dst, Bytes data);
+    void broadcast(bytes data);
+    void send(const peer_id& dst, bytes data);
 
-    [[nodiscard]] PeerId   id() const noexcept { return cfg_.nodeId; }
-    [[nodiscard]] std::uint16_t listenPort() const noexcept { return listenPort_.load(); }
-    [[nodiscard]] std::vector<PeerId> connectedPeers() const;
-    [[nodiscard]] std::vector<PeerId> knownPeers() const;
+    [[nodiscard]] peer_id   id() const noexcept { return cfg_.nodeId; }
+    [[nodiscard]] std::uint16_t listen_port() const noexcept { return listenPort_.load(); }
+    [[nodiscard]] std::vector<peer_id> connected_peers() const;
+    [[nodiscard]] std::vector<peer_id> known_peers() const;
 
-    // PeerManagerDelegate
-    void peerDiscovered(const PeerId&) override;
-    void peerConnected(const PeerId&) override;
-    void peerDisconnected(const PeerId&) override;
-    void peerLost(const PeerId&) override;
-    void messageReceived(const PeerId& from, Bytes payload) override;
-    void error(const Error&) override;
-    void connectedSnapshot(std::vector<PeerId>) override;
-    void knownSnapshot(std::vector<PeerId>) override;
+    // peer_manager_delegate
+    void peer_discovered(const peer_id&) override;
+    void peer_connected(const peer_id&) override;
+    void peer_disconnected(const peer_id&) override;
+    void peer_lost(const peer_id&) override;
+    void message_received(const peer_id& from, bytes payload) override;
+    void on_error(const error&) override;
+    void connected_snapshot(std::vector<peer_id>) override;
+    void known_snapshot(std::vector<peer_id>) override;
 
 private:
-    struct Command {
-        enum class Type { Broadcast, Targeted, Stop } type;
-        PeerId                 dst;
+    struct command {
+        enum class kind { Broadcast, Targeted, Stop } type;
+        peer_id                 dst;
         std::vector<std::byte> payload;
     };
 
-    void post(Command&& c);
-    void drainMailbox();
+    void post(command&& c);
+    void drain_mailbox();
 
-    MeshConfig    cfg_;
-    LocalIdentity self_;
-    Callbacks     cb_;
+    mesh_config    cfg_;
+    local_identity self_;
+    callbacks     cb_;
 
-    EventLoop                    loop_;
-    std::unique_ptr<PeerManager> peers_;
-    std::unique_ptr<Listener>    listener_;
-    std::unique_ptr<Discovery>   discovery_;
+    event_loop                    loop_;
+    std::unique_ptr<peer_manager> peers_;
+    std::unique_ptr<listener>    listener_;
+    std::unique_ptr<discovery>   discovery_;
 
     std::thread       ioThread_;
     std::thread::id   ioThreadId_{};
@@ -77,11 +77,11 @@ private:
     std::atomic<std::uint16_t> listenPort_{0};
 
     std::mutex          mailboxMu_;
-    std::deque<Command> mailbox_;
+    std::deque<command> mailbox_;
 
     mutable std::mutex                       snapMu_;
-    std::shared_ptr<const std::vector<PeerId>> connectedSnap_;
-    std::shared_ptr<const std::vector<PeerId>> knownSnap_;
+    std::shared_ptr<const std::vector<peer_id>> connectedSnap_;
+    std::shared_ptr<const std::vector<peer_id>> knownSnap_;
 };
 
 } // namespace mm

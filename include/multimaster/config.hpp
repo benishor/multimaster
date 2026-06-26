@@ -12,18 +12,18 @@ namespace mm {
 
 /// A static peer hint for environments where multicast is unavailable
 /// (containers, some Wi-Fi APs). The node will additionally try to dial these.
-struct SeedPeer {
+struct seed_peer {
     std::string host; // IPv4 dotted-quad or resolvable hostname
     uint16_t    port; // the peer's TCP listen port
 };
 
-/// All tunables for a Mesh node. Defaults are sensible for a small LAN mesh
+/// All tunables for a mesh node. Defaults are sensible for a small LAN mesh
 /// (tens of nodes). Durations use steady_clock semantics internally.
-struct MeshConfig {
+struct mesh_config {
     using ms = std::chrono::milliseconds;
 
     // --- identity -----------------------------------------------------------
-    PeerId      nodeId          = PeerId::generate();
+    peer_id      nodeId          = peer_id::generate();
     std::string groupName       = "default"; // logical mesh segregation
     uint8_t     protocolVersion = 1;
 
@@ -53,13 +53,13 @@ struct MeshConfig {
     std::size_t fanout          = 0; // 0 = dial every discovered peer (near-full mesh)
 
     // --- backpressure / safety ---------------------------------------------
-    enum class Overflow { Disconnect, DropOldest, DropNewest };
+    enum class overflow { Disconnect, DropOldest, DropNewest };
     std::size_t maxOutboundQueueBytes = 8u << 20;  // 8 MiB per peer
-    Overflow    overflowPolicy        = Overflow::Disconnect;
+    overflow    overflowPolicy        = overflow::Disconnect;
     std::size_t maxMessageBytes       = 16u << 20; // reject oversized frames (DoS guard)
 
     // --- fallback discovery -------------------------------------------------
-    std::vector<SeedPeer> seedPeers;
+    std::vector<seed_peer> seedPeers;
 };
 
 } // namespace mm

@@ -8,7 +8,7 @@ namespace mm {
 namespace {
 constexpr char kHex[] = "0123456789abcdef";
 
-int hexVal(char c) {
+int hex_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -16,7 +16,7 @@ int hexVal(char c) {
 }
 } // namespace
 
-std::string PeerId::toString() const {
+std::string peer_id::to_string() const {
     std::string out;
     out.reserve(bytes.size() * 2);
     for (std::byte b : bytes) {
@@ -27,13 +27,13 @@ std::string PeerId::toString() const {
     return out;
 }
 
-std::optional<PeerId> PeerId::fromString(std::string_view sv) {
+std::optional<peer_id> peer_id::from_string(std::string_view sv) {
     // Accept dashes as cosmetic separators; require exactly 32 hex digits.
-    PeerId id;
+    peer_id id;
     std::size_t nibble = 0;
     for (char c : sv) {
         if (c == '-') continue;
-        int v = hexVal(c);
+        int v = hex_val(c);
         if (v < 0) return std::nullopt;
         if (nibble >= 32) return std::nullopt;
         auto& dst = id.bytes[nibble / 2];
@@ -48,8 +48,8 @@ std::optional<PeerId> PeerId::fromString(std::string_view sv) {
     return id;
 }
 
-PeerId PeerId::generate() {
-    PeerId id;
+peer_id peer_id::generate() {
+    peer_id id;
     std::random_device rd;
     // Fill 16 bytes from a 32-bit entropy source, 4 bytes at a time.
     for (std::size_t i = 0; i < id.bytes.size(); i += 4) {
@@ -62,7 +62,7 @@ PeerId PeerId::generate() {
     return id;
 }
 
-bool PeerId::isZero() const {
+bool peer_id::is_zero() const {
     for (std::byte b : bytes) {
         if (b != std::byte{0}) return false;
     }
@@ -71,7 +71,7 @@ bool PeerId::isZero() const {
 
 } // namespace mm
 
-std::size_t std::hash<mm::PeerId>::operator()(const mm::PeerId& id) const noexcept {
+std::size_t std::hash<mm::peer_id>::operator()(const mm::peer_id& id) const noexcept {
     // FNV-1a over the 16 bytes — fast and good enough for hash-table bucketing.
     std::uint64_t h = 1469598103934665603ULL;
     for (std::byte b : id.bytes) {

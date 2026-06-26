@@ -8,50 +8,50 @@
 
 namespace mm {
 
-PeerConnection::PeerConnection(EventLoop& loop, ConnectionListener& listener,
-                               const MeshConfig& cfg, const LocalIdentity& self,
-                               Socket sock, const sockaddr_in& peerAddr,
+peer_connection::peer_connection(event_loop& loop, connection_listener& listener,
+                               const mesh_config& cfg, const local_identity& self,
+                               socket sock, const sockaddr_in& peerAddr,
                                std::uint64_t nonce)
     : loop_(loop), listener_(listener), cfg_(cfg), self_(self),
       sock_(std::move(sock)), peerAddr_(peerAddr), inbound_(true),
-      state_(State::Handshaking), localNonce_(nonce),
-      createdAt_(EventLoop::Clock::now()), lastRecv_(createdAt_), lastSend_(createdAt_) {
-    (void)sock_.setTcpNoDelay();
-    (void)sock_.setKeepAlive();
+      state_(conn_state::Handshaking), localNonce_(nonce),
+      createdAt_(event_loop::clock::now()), lastRecv_(createdAt_), lastSend_(createdAt_) {
+    (void)sock_.set_tcp_no_delay();
+    (void)sock_.set_keep_alive();
     if (loop_.add(sock_.get(), EPOLLIN, this)) registered_ = true;
-    sendHello(); // symmetric handshake: announce ourselves immediately
+    send_hello(); // symmetric handshake: announce ourselves immediately
 }
 
-PeerConnection::PeerConnection(EventLoop& loop, ConnectionListener& listener,
-                               const MeshConfig& cfg, const LocalIdentity& self,
+peer_connection::peer_connection(event_loop& loop, connection_listener& listener,
+                               const mesh_config& cfg, const local_identity& self,
                                const sockaddr_in& target, std::uint64_t nonce)
     : loop_(loop), listener_(listener), cfg_(cfg), self_(self),
-      peerAddr_(target), inbound_(false), state_(State::ConnectingOut),
-      localNonce_(nonce), createdAt_(EventLoop::Clock::now()),
+      peerAddr_(target), inbound_(false), state_(conn_state::ConnectingOut),
+      localNonce_(nonce), createdAt_(event_loop::clock::now()),
       lastRecv_(createdAt_), lastSend_(createdAt_) {}
 
-PeerConnection::~PeerConnection() {
+peer_connection::~peer_connection() {
     if (registered_ && sock_.valid()) loop_.del(sock_.get());
 }
 
-bool PeerConnection::startConnect() {
-    sock_ = Socket::tcp();
+bool peer_connection::start_connect() {
+    sock_ = socket::tcp();
     if (!sock_.valid()) {
-        fail(ErrorCategory::Socket, errno, "socket() failed");
+        fail(error_category::Socket, errno, "socket() failed");
         return false;
     }
-    (void)sock_.setTcpNoDelay();
-    (void)sock_.setKeepAlive();
+    (void)sock_.set_tcp_no_delay();
+    (void)sock_.set_keep_alive();
 
     int rc = ::connect(sock_.get(), reinterpret_cast<sockaddr*>(&peerAddr_),
                        sizeof peerAddr_);
     if (rc != 0 && errno != EINPROGRESS) {
-        fail(ErrorCategory::Socket, errno, "connect() failed");
+        fail(error_category::Socket, errno, "connect() failed");
         return false;
     }
     // Wait for writability to learn the connect result.
     if (!loop_.add(sock_.get(), EPOLLOUT, this)) {
-        fail(ErrorCategory::Socket, errno, "epoll add failed");
+        fail(error_category::Socket, errno, "epoll add failed");
         return false;
     }
     registered_ = true;
@@ -59,60 +59,60 @@ bool PeerConnection::startConnect() {
     return true;
 }
 
-void PeerConnection::onConnectComplete() {
+void peer_connection::on_connect_complete() {
     int       err = 0;
     socklen_t len = sizeof err;
     if (::getsockopt(sock_.get(), SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err != 0) {
-        fail(ErrorCategory::Socket, err, "async connect failed");
+        fail(error_category::Socket, err, "async connect failed");
         return;
     }
-    state_ = State::Handshaking;
+    state_ = conn_state::Handshaking;
     // The socket was registered EPOLLOUT-only for the connect; now we must also
-    // listen for the peer's Hello. Re-register explicitly (don't rely on
+    // listen for the peer's hello. Re-register explicitly (don't rely on
     // updateEpoll's stale-flag fast path, which can't add EPOLLIN here).
     if (registered_ && loop_.mod(sock_.get(), EPOLLIN, this)) wantWrite_ = false;
-    sendHello();   // may re-arm EPOLLOUT via flushOutbound if the write blocks
+    send_hello();   // may re-arm EPOLLOUT via flushOutbound if the write blocks
 }
 
-void PeerConnection::sendHello() {
-    Hello h;
+void peer_connection::send_hello() {
+    hello h;
     h.nodeId          = self_.nodeId;
     h.protocolVersion = self_.protocolVersion;
     h.tcpListenPort   = self_.listenPort;
     h.groupName       = self_.groupName;
     h.nonce           = localNonce_;
-    auto frame = encodeHello(inbound_ ? FrameType::HelloAck : FrameType::Hello, h);
+    auto frame = encode_hello(inbound_ ? frame_type::HelloAck : frame_type::Hello, h);
     out_.append(frame.data(), frame.size());
-    lastSend_ = EventLoop::Clock::now();
-    flushOutbound();
+    lastSend_ = event_loop::clock::now();
+    flush_outbound();
 }
 
-void PeerConnection::onIoEvents(std::uint32_t events) {
+void peer_connection::on_io_events(std::uint32_t events) {
     if (dead_) return;
 
     if (events & (EPOLLHUP | EPOLLERR)) {
-        fail(ErrorCategory::Socket, 0, "peer hangup/error");
+        fail(error_category::Socket, 0, "peer hangup/error");
         return;
     }
 
-    if (state_ == State::ConnectingOut && (events & EPOLLOUT)) {
-        onConnectComplete();
+    if (state_ == conn_state::ConnectingOut && (events & EPOLLOUT)) {
+        on_connect_complete();
         if (dead_) return;
     }
 
     if (events & EPOLLOUT) {
-        flushOutbound();
+        flush_outbound();
         if (dead_) return;
     }
 
     if (events & (EPOLLIN | EPOLLRDHUP)) {
-        doRead();
+        do_read();
     }
 }
 
-void PeerConnection::doRead() {
+void peer_connection::do_read() {
     for (;;) {
-        std::byte* tail = in_.reserveTail(64 * 1024);
+        std::byte* tail = in_.reserve_tail(64 * 1024);
         ssize_t n = ::recv(sock_.get(), tail, 64 * 1024, 0);
         if (n > 0) {
             in_.uncommit(64 * 1024 - static_cast<std::size_t>(n));
@@ -120,66 +120,66 @@ void PeerConnection::doRead() {
         }
         in_.uncommit(64 * 1024); // nothing read into the reserved tail
         if (n == 0) {
-            fail(ErrorCategory::Socket, 0, "peer closed connection");
+            fail(error_category::Socket, 0, "peer closed connection");
             return;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
         if (errno == EINTR) continue;
-        fail(ErrorCategory::Socket, errno, "recv failed");
+        fail(error_category::Socket, errno, "recv failed");
         return;
     }
-    parseInbound();
+    parse_inbound();
 }
 
-void PeerConnection::parseInbound() {
+void peer_connection::parse_inbound() {
     for (;;) {
-        ParsedFrame frame;
+        parsed_frame frame;
         std::size_t consumed = 0;
         std::span<const std::byte> view(in_.data(), in_.size());
-        DecodeStatus st = tryDecodeFrame(view, cfg_.maxMessageBytes, frame, consumed);
-        if (st == DecodeStatus::NeedMore) break;
-        if (st == DecodeStatus::Error) {
-            fail(ErrorCategory::Protocol, 0, "malformed/oversized frame");
+        decode_status st = try_decode_frame(view, cfg_.maxMessageBytes, frame, consumed);
+        if (st == decode_status::NeedMore) break;
+        if (st == decode_status::Error) {
+            fail(error_category::Protocol, 0, "malformed/oversized frame");
             return;
         }
 
-        lastRecv_ = EventLoop::Clock::now();
+        lastRecv_ = event_loop::clock::now();
 
         switch (frame.type) {
-        case FrameType::Hello:
-        case FrameType::HelloAck: {
-            if (state_ != State::Handshaking) {
-                // duplicate Hello — ignore, but still consume
+        case frame_type::Hello:
+        case frame_type::HelloAck: {
+            if (state_ != conn_state::Handshaking) {
+                // duplicate hello — ignore, but still consume
                 break;
             }
-            const Hello& h = frame.hello;
+            const hello& h = frame.hello_msg;
             if (h.protocolVersion != self_.protocolVersion || h.groupName != self_.groupName) {
-                fail(ErrorCategory::Protocol, 0, "protocol/group mismatch");
+                fail(error_category::Protocol, 0, "protocol/group mismatch");
                 return;
             }
             peerId_         = h.nodeId;
             peerListenPort_ = h.tcpListenPort;
             peerNonce_      = h.nonce;
-            state_          = State::Established;
+            state_          = conn_state::Established;
             in_.consume(consumed);
-            listener_.onPeerHandshake(*this, h);
+            listener_.on_peer_handshake(*this, h);
             if (dead_) return; // listener may have closed us (dial-race loser)
             continue;
         }
-        case FrameType::Heartbeat:
+        case frame_type::Heartbeat:
             break; // lastRecv_ already updated
-        case FrameType::Goodbye:
+        case frame_type::Goodbye:
             in_.consume(consumed);
-            fail(ErrorCategory::Socket, 0, "peer said goodbye");
+            fail(error_category::Socket, 0, "peer said goodbye");
             return;
-        case FrameType::Data:
-            if (state_ != State::Established) {
-                fail(ErrorCategory::Protocol, 0, "data before handshake");
+        case frame_type::Data:
+            if (state_ != conn_state::Established) {
+                fail(error_category::Protocol, 0, "data before handshake");
                 return;
             }
             // Deliver BEFORE consuming: frame.data.payload views the inbound
             // buffer, which consume() may compact/clear.
-            listener_.onPeerData(*this, frame.data);
+            listener_.on_peer_data(*this, frame.data);
             if (dead_) return;
             in_.consume(consumed);
             continue;
@@ -188,18 +188,18 @@ void PeerConnection::parseInbound() {
     }
 }
 
-void PeerConnection::sendRaw(std::span<const std::byte> frame) {
+void peer_connection::send_raw(std::span<const std::byte> frame) {
     if (dead_) return;
     if (out_.size() + frame.size() > cfg_.maxOutboundQueueBytes) {
         switch (cfg_.overflowPolicy) {
-        case MeshConfig::Overflow::Disconnect:
-            fail(ErrorCategory::Backpressure, 0, "outbound queue overflow");
+        case mesh_config::overflow::Disconnect:
+            fail(error_category::Backpressure, 0, "outbound queue overflow");
             return;
-        case MeshConfig::Overflow::DropNewest:
-            listener_.reportError({ErrorCategory::Backpressure, 0,
+        case mesh_config::overflow::DropNewest:
+            listener_.report_error({error_category::Backpressure, 0,
                                    "dropped outbound (newest)", peerId_});
             return;
-        case MeshConfig::Overflow::DropOldest:
+        case mesh_config::overflow::DropOldest:
             // Drop from the head until the new frame fits.
             while (!out_.empty() && out_.size() + frame.size() > cfg_.maxOutboundQueueBytes) {
                 out_.consume(out_.size()); // coarse: clear backlog
@@ -208,11 +208,11 @@ void PeerConnection::sendRaw(std::span<const std::byte> frame) {
         }
     }
     out_.append(frame.data(), frame.size());
-    lastSend_ = EventLoop::Clock::now();
-    flushOutbound();
+    lastSend_ = event_loop::clock::now();
+    flush_outbound();
 }
 
-void PeerConnection::flushOutbound() {
+void peer_connection::flush_outbound() {
     while (!out_.empty()) {
         ssize_t n = ::send(sock_.get(), out_.data(), out_.size(), MSG_NOSIGNAL);
         if (n > 0) {
@@ -221,55 +221,55 @@ void PeerConnection::flushOutbound() {
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
         if (n < 0 && errno == EINTR) continue;
-        fail(ErrorCategory::Socket, errno, "send failed");
+        fail(error_category::Socket, errno, "send failed");
         return;
     }
-    updateEpoll();
+    update_epoll();
 }
 
-void PeerConnection::updateEpoll() {
+void peer_connection::update_epoll() {
     if (dead_ || !registered_) return;
-    bool needWrite = !out_.empty() || state_ == State::ConnectingOut;
+    bool needWrite = !out_.empty() || state_ == conn_state::ConnectingOut;
     if (needWrite == wantWrite_) return;
     std::uint32_t ev = EPOLLIN | (needWrite ? EPOLLOUT : 0u);
     if (loop_.mod(sock_.get(), ev, this)) wantWrite_ = needWrite;
 }
 
-void PeerConnection::maybeHeartbeat(EventLoop::Clock::time_point now,
+void peer_connection::maybe_heartbeat(event_loop::clock::time_point now,
                                     std::chrono::milliseconds interval) {
-    if (state_ != State::Established || dead_) return;
+    if (state_ != conn_state::Established || dead_) return;
     if (now - lastSend_ >= interval) {
-        auto hb = encodeHeartbeat();
-        sendRaw(std::span<const std::byte>(hb.data(), hb.size()));
+        auto hb = encode_heartbeat();
+        send_raw(std::span<const std::byte>(hb.data(), hb.size()));
     }
 }
 
-void PeerConnection::closeGracefully() {
+void peer_connection::close_gracefully() {
     if (dead_) return;
-    auto bye = encodeGoodbye();
+    auto bye = encode_goodbye();
     out_.append(bye.data(), bye.size());
-    flushOutbound();
-    markDead();
+    flush_outbound();
+    mark_dead();
 }
 
-void PeerConnection::fail(ErrorCategory cat, int err, std::string what) {
+void peer_connection::fail(error_category cat, int err, std::string what) {
     if (dead_) return;
-    if (cat != ErrorCategory::Socket || err != 0) {
-        listener_.reportError({cat, err, std::move(what),
-                               peerId_.isZero() ? std::nullopt : std::optional<PeerId>(peerId_)});
+    if (cat != error_category::Socket || err != 0) {
+        listener_.report_error({cat, err, std::move(what),
+                               peerId_.is_zero() ? std::nullopt : std::optional<peer_id>(peerId_)});
     }
-    markDead();
+    mark_dead();
 }
 
-void PeerConnection::markDead() {
+void peer_connection::mark_dead() {
     if (dead_) return;
     dead_  = true;
-    state_ = State::Dead;
+    state_ = conn_state::Dead;
     if (registered_ && sock_.valid()) {
         loop_.del(sock_.get());
         registered_ = false;
     }
-    listener_.onPeerClosed(*this); // owner schedules deferred reap
+    listener_.on_peer_closed(*this); // owner schedules deferred reap
 }
 
 } // namespace mm

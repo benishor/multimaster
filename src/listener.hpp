@@ -12,26 +12,26 @@ namespace mm {
 
 /// Owns the TCP listening socket. On each incoming connection it invokes the
 /// accept callback with the accepted (nonblocking) socket and the peer address.
-class Listener : public IoHandler {
+class listener : public io_handler {
 public:
-    using AcceptFn = std::function<void(Socket, const sockaddr_in&)>;
+    using accept_fn = std::function<void(socket, const sockaddr_in&)>;
 
-    Listener(EventLoop& loop, AcceptFn onAccept);
-    ~Listener() override;
+    listener(event_loop& loop, accept_fn onAccept);
+    ~listener() override;
 
     /// Bind to bindAddr:port and listen. `port == 0` requests an ephemeral
-    /// port; the resolved port is available via boundPort() afterwards. Throws
+    /// port; the resolved port is available via bound_port() afterwards. Throws
     /// std::system_error on failure.
     void start(const std::string& bindAddr, std::uint16_t port);
 
-    [[nodiscard]] std::uint16_t boundPort() const noexcept { return boundPort_; }
+    [[nodiscard]] std::uint16_t bound_port() const noexcept { return boundPort_; }
 
-    void onIoEvents(std::uint32_t events) override;
+    void on_io_events(std::uint32_t events) override;
 
 private:
-    EventLoop&    loop_;
-    AcceptFn      onAccept_;
-    Socket        sock_;
+    event_loop&    loop_;
+    accept_fn      onAccept_;
+    socket        sock_;
     std::uint16_t boundPort_ = 0;
 };
 
