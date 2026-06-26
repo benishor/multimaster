@@ -11,7 +11,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -81,7 +83,20 @@ private:
         event_loop::clock::time_point lastSeen{};
         int                          reconnectAttempts = 0;
         bool                         announced = false;
+        bool                         isStatic  = false; // a configured static peer
         peer_connection*              conn      = nullptr;
+    };
+
+    // A configured static (typically internet) peer whose connection is kept up
+    // persistently. Tracked by endpoint because the peer_id is unknown until the
+    // first handshake; the host is re-resolved on every dial attempt.
+    struct static_target {
+        std::string                   host;
+        std::uint16_t                 port = 0;
+        std::optional<peer_id>        learnedId;          // set once handshaked
+        int                           attempts = 0;
+        event_loop::clock::time_point nextAttempt{};      // backoff gate
+        peer_connection*              dialing = nullptr;   // in-flight dial, if any
     };
 
     peer_connection* start_dial(peer_record& r);
@@ -92,6 +107,10 @@ private:
     void            tick();
     void            schedule_tick();
     void            dial_seeds();
+    void            maintain_static_peers();
+    void            start_static_dial(std::size_t targetIdx);
+    bool            resolve_endpoint(const std::string& host, std::uint16_t port,
+                                     sockaddr_in& out) const;
     void            schedule_reap();
     void            reap();
     void            emit_connected_snapshot();
@@ -109,6 +128,9 @@ private:
     std::vector<std::unique_ptr<peer_connection>> conns_;
     std::unordered_map<peer_id, peer_record>       records_;
     std::unordered_map<peer_id, peer_connection*>  estab_; // established, by peer id
+
+    std::vector<static_target>                       static_targets_;
+    std::unordered_map<peer_connection*, std::size_t> static_dial_conn_; // dial -> target idx
 
     std::vector<peer_connection*> reap_;
     bool                         reapScheduled_ = false;

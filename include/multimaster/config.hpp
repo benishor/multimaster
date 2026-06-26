@@ -10,10 +10,11 @@
 
 namespace mm {
 
-/// A static peer hint for environments where multicast is unavailable
-/// (containers, some Wi-Fi APs). The node will additionally try to dial these.
+/// A peer endpoint addressed by host + TCP port. Used both for seed peers
+/// (one-shot bootstrap hints) and for static peers (persistently maintained
+/// connections, typically across the internet).
 struct seed_peer {
-    std::string host; // IPv4 dotted-quad or resolvable hostname
+    std::string host; // IPv4 dotted-quad or resolvable hostname (DNS re-resolved)
     uint16_t    port; // the peer's TCP listen port
 };
 
@@ -59,7 +60,18 @@ struct mesh_config {
     std::size_t maxMessageBytes       = 16u << 20; // reject oversized frames (DoS guard)
 
     // --- fallback discovery -------------------------------------------------
+    // Seed peers: bootstrap hints, dialed at startup and re-dialed only while
+    // this node is isolated (no established peers). Useful when multicast is
+    // unavailable (containers, some Wi-Fi APs).
     std::vector<seed_peer> seedPeers;
+
+    // Static peers: explicit endpoints — typically across the internet, where
+    // multicast cannot reach — to which a connection is *persistently*
+    // maintained. Dialed at startup, reconnected with backoff whenever the link
+    // drops (regardless of LAN mesh state), and never pruned as "lost". The host
+    // is DNS-resolved fresh on every attempt, so endpoints behind changing IPs
+    // (dynamic DNS, rolling cloud instances) keep working.
+    std::vector<seed_peer> staticPeers;
 };
 
 } // namespace mm

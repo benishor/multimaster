@@ -94,16 +94,38 @@ Best-effort, unordered, **at-most-once per node** (the dedup cache guarantees no
 duplicate delivery). There is no built-in acknowledgement or retransmission — if
 you need reliability or ordering, layer it on top of the opaque payload.
 
-## When multicast isn't available
+## Connecting beyond the LAN
 
-In containers or on some Wi-Fi networks multicast may be blocked. Set
-`mesh_config::seedPeers` to a static list of `{host, port}` entries; nodes will
-dial those directly in addition to (or instead of) multicast discovery.
+Multicast discovery only covers the local subnet (and is often blocked in
+containers or on some Wi-Fi networks). Two config fields let you reach peers by
+explicit `{host, port}` — including across the internet. Both DNS-resolve the
+host fresh on every dial attempt, so endpoints behind changing IPs keep working.
+
+- **`seedPeers`** — *bootstrap hints*. Dialed at startup and re-dialed only while
+  this node is isolated (has no established peers). Use these to break into a mesh
+  when multicast isn't available.
+
+- **`staticPeers`** — *persistent connections*. Dialed at startup and
+  **continuously maintained**: if the link drops it reconnects with backoff
+  regardless of LAN mesh state, and the peer is never pruned as "lost". Use these
+  for stable, always-on peers reachable over the internet.
+
+```cpp
+mm::mesh_config cfg;
+cfg.staticPeers.push_back({"mesh.example.com", 45000}); // always keep this link up
+cfg.seedPeers.push_back({"10.0.0.5", 45000});           // bootstrap fallback only
+```
+
+A peer found both via multicast and via a static/seed entry is de-duplicated
+automatically (the connection-handshake logic keeps a single link per node).
 
 ## Notes & limits
 
-- **LAN-scoped by design**: multicast TTL defaults to 1 (stays on the local
-  subnet). Cross-subnet meshes require `seedPeers`.
+- **LAN-scoped discovery by design**: multicast TTL defaults to 1 (stays on the
+  local subnet). Reach other subnets / the internet via `seedPeers` /
+  `staticPeers`.
+- Hostname resolution for seed/static peers is synchronous on the IO thread;
+  endpoints are few and dialed only at startup / on reconnect intervals.
 - Linux-only (epoll, `accept4`, `eventfd`).
 - Tuned for tens of nodes.
 

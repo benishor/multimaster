@@ -1,13 +1,30 @@
-// mm_chat — a tiny LAN broadcast chat over the multimaster mesh.
+// mm_chat — a tiny broadcast chat over the multimaster mesh.
 //
-// Run it in two or more terminals (same LAN / same host). Each node discovers
-// the others automatically; lines you type are broadcast to everyone.
+// On a LAN, peers discover each other automatically via multicast:
 //
 //   ./mm_chat [groupName]
+//
+// To connect across the internet (WAN), multicast doesn't apply — give each node
+// the public host:port of one or more peers as *static peers*. They are dialed
+// and the connection is kept up persistently (reconnect with backoff):
+//
+//   ./mm_chat [groupName] [--port N] [host:port ...]
+//
+// Example, two machines over the internet (peers find each other once either
+// side can reach the other; listing both ends on both is fine and de-duped):
+//
+//   # machine A (public IP a.a.a.a), listen on a fixed port so B can reach it
+//   ./mm_chat myroom --port 45000 b.b.b.b:45000
+//   # machine B (public IP b.b.b.b)
+//   ./mm_chat myroom --port 45000 a.a.a.a:45000
+//
+// NOTE: the listen port must be reachable from the peer — open it in the
+// firewall and, behind NAT, forward it to this host. multimaster does not do NAT
+// traversal; one reachable endpoint per pair is enough.
 
 #include <multimaster/multimaster.hpp>
 
-#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -19,11 +36,38 @@ mm::bytes as_bytes(const std::string& s) {
 std::string to_str(mm::bytes b) {
     return std::string(reinterpret_cast<const char*>(b.data()), b.size());
 }
+
+// Parse "host:port" (IPv4 or hostname) into a seed_peer. Returns false if malformed.
+bool parse_endpoint(const std::string& arg, mm::seed_peer& out) {
+    auto colon = arg.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon + 1 >= arg.size()) return false;
+    out.host = arg.substr(0, colon);
+    out.port = static_cast<uint16_t>(std::strtoul(arg.c_str() + colon + 1, nullptr, 10));
+    return out.port != 0;
+}
 } // namespace
 
 int main(int argc, char** argv) {
     mm::mesh_config cfg;
-    if (argc > 1) cfg.groupName = argv[1];
+
+    // argv[1] (optional, not starting with '-') is the group name.
+    int i = 1;
+    if (i < argc && argv[i][0] != '-') cfg.groupName = argv[i++];
+
+    // Remaining args: --port N to fix the listen port, and host:port WAN peers.
+    for (; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--port" && i + 1 < argc) {
+            cfg.listenPort = static_cast<uint16_t>(std::strtoul(argv[++i], nullptr, 10));
+            continue;
+        }
+        mm::seed_peer ep;
+        if (parse_endpoint(a, ep)) {
+            cfg.staticPeers.push_back(ep); // persistently maintained WAN peer
+        } else {
+            std::cerr << "ignoring unrecognized argument: " << a << "\n";
+        }
+    }
 
     mm::mesh mesh(cfg);
 
@@ -40,6 +84,11 @@ int main(int argc, char** argv) {
     mesh.start();
     std::cout << "this node: " << mesh.id().to_string() << "  port: " << mesh.listen_port()
               << "  group: " << cfg.groupName << "\n";
+    if (!cfg.staticPeers.empty()) {
+        std::cout << "static peers:";
+        for (const auto& s : cfg.staticPeers) std::cout << " " << s.host << ":" << s.port;
+        std::cout << "\n";
+    }
     std::cout << "type messages and press enter (Ctrl-D to quit)\n";
 
     std::string line;

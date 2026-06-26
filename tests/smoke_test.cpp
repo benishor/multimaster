@@ -142,4 +142,78 @@ TEST("three-node mesh: broadcast, targeted, disconnect, lost") {
     nodes[2]->node_mesh->stop();
 }
 
+// Two nodes that can ONLY find each other via a configured static (internet-
+// style) peer: discovery is neutralized by giving them distinct multicast ports,
+// so a connection proves the static-peer path works. Also verifies persistent
+// reconnection after the static peer restarts.
+TEST("static peer: connect, message, persistent reconnect") {
+    const uint16_t portA = 47140, portB = 47141;
+
+    auto cfgA = [&] {
+        mesh_config c;
+        c.groupName        = "static-test-group";
+        c.bindAddr         = "127.0.0.1";
+        c.listenPort       = portA;
+        c.multicastPort    = 50140;          // isolated from B's discovery
+        c.multicastIface   = "127.0.0.1";
+        c.heartbeatInterval = 300ms;
+        c.heartbeatTimeout  = 1500ms;
+        c.reconnectBase     = 200ms;
+        c.reconnectMax      = 1500ms;
+        return c;
+    };
+
+    mesh_config cfgB;
+    cfgB.groupName        = "static-test-group";
+    cfgB.bindAddr         = "127.0.0.1";
+    cfgB.listenPort       = portB;
+    cfgB.multicastPort    = 50141;           // distinct => no multicast pairing
+    cfgB.multicastIface   = "127.0.0.1";
+    cfgB.heartbeatInterval = 300ms;
+    cfgB.heartbeatTimeout  = 1500ms;
+    cfgB.reconnectBase     = 200ms;
+    cfgB.reconnectMax      = 1500ms;
+    cfgB.staticPeers.push_back({"127.0.0.1", portA}); // A reachable only as a static peer
+
+    std::atomic<int> bConnects{0};
+    std::atomic<int> aMessages{0};
+
+    auto node_b = std::make_unique<mesh>(cfgB);
+    {
+        callbacks cb;
+        cb.onPeerConnected = [&](peer_id) { bConnects++; };
+        node_b->set_callbacks(std::move(cb));
+    }
+    node_b->start();
+
+    auto start_a = [&] {
+        auto a = std::make_unique<mesh>(cfgA());
+        callbacks cb;
+        cb.onMessage = [&](peer_id, bytes) { aMessages++; };
+        a->set_callbacks(std::move(cb));
+        a->start();
+        return a;
+    };
+    auto node_a = start_a();
+
+    // B should dial A via the static endpoint and connect.
+    CHECK(wait_for([&] { return node_b->connected_peers().size() >= 1; }, 4000ms));
+
+    // Data flows over the static-established link.
+    node_b->broadcast(as_bytes("via-static"));
+    CHECK(wait_for([&] { return aMessages.load() >= 1; }, 3000ms));
+
+    // A goes away; B observes the drop.
+    node_a.reset();
+    CHECK(wait_for([&] { return node_b->connected_peers().empty(); }, 4000ms));
+
+    // A comes back on the same endpoint; B must persistently reconnect.
+    node_a = start_a();
+    CHECK(wait_for([&] { return node_b->connected_peers().size() >= 1; }, 6000ms));
+    CHECK(bConnects.load() >= 2); // connected at least twice => reconnect happened
+
+    node_a.reset();
+    node_b->stop();
+}
+
 int main() { return mm::test::run(); }

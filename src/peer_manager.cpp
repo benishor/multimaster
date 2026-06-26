@@ -18,7 +18,14 @@ peer_manager::~peer_manager() = default;
 void peer_manager::start() {
     running_ = true;
     router_.start();
+
+    // Register configured static (persistent) peers.
+    for (const auto& s : cfg_.staticPeers) {
+        static_targets_.push_back(static_target{s.host, s.port, std::nullopt, 0, {}, nullptr});
+    }
+
     dial_seeds();
+    maintain_static_peers();
     schedule_tick();
 }
 
@@ -31,6 +38,8 @@ void peer_manager::shutdown() {
     estab_.clear();
     conns_.clear();
     records_.clear();
+    static_targets_.clear();
+    static_dial_conn_.clear();
     reap_.clear();
 }
 
@@ -118,8 +127,29 @@ void peer_manager::on_peer_handshake(peer_connection& c, const hello& peer) {
         return;
     }
 
+    // If this connection originated from a static-peer dial, bind the target to
+    // the learned id and flag the record so it is maintained persistently and
+    // never pruned as "lost". Done before dial-race resolution so the binding
+    // holds even if this particular connection loses the race.
+    bool fromStatic = false;
+    if (auto sd = static_dial_conn_.find(&c); sd != static_dial_conn_.end()) {
+        auto& t = static_targets_[sd->second];
+        if (t.learnedId && !(*t.learnedId == pid)) {
+            // The endpoint now answers with a different id (peer restarted /
+            // repointed). Drop the stale record so it doesn't linger.
+            records_.erase(*t.learnedId);
+            emit_known_snapshot();
+        }
+        t.learnedId = pid;
+        t.attempts  = 0;
+        t.dialing   = nullptr;
+        static_dial_conn_.erase(sd);
+        fromStatic = true;
+    }
+
     auto& r = records_[pid];
     r.id = pid;
+    if (fromStatic) r.isStatic = true;
 
     // Learn/refresh dial-back address from the peer's advertised listen port.
     sockaddr_in da = c.peer_addr();
@@ -165,6 +195,13 @@ void peer_manager::on_peer_data(peer_connection& c, const data_view& view) {
 void peer_manager::on_peer_closed(peer_connection& c) {
     const peer_id pid = c.id();
 
+    // If this was an in-flight static dial, free the slot so maintenance can
+    // redial the endpoint (re-resolving DNS) after the backoff interval.
+    if (auto sd = static_dial_conn_.find(&c); sd != static_dial_conn_.end()) {
+        static_targets_[sd->second].dialing = nullptr;
+        static_dial_conn_.erase(sd);
+    }
+
     // Detach from the established map if this was the live link for its peer.
     if (!pid.is_zero()) {
         auto e = estab_.find(pid);
@@ -191,7 +228,13 @@ void peer_manager::on_peer_closed(peer_connection& c) {
             delegate_.peer_disconnected(rec->id);
             emit_connected_snapshot();
         }
-        schedule_reconnect(*rec);
+        // Static peers are redialed by maintain_static_peers() (by endpoint, with
+        // DNS re-resolution); all others use the id-keyed reconnect path.
+        if (rec->isStatic) {
+            maintain_static_peers();
+        } else {
+            schedule_reconnect(*rec);
+        }
     }
 
     reap_.push_back(&c);
@@ -279,9 +322,11 @@ void peer_manager::tick() {
     }
 
     // Lost detection: peers we haven't heard announce from in a while and are
-    // not currently connected.
+    // not currently connected. Static peers are exempt — they are persistent by
+    // contract and may be silent (no multicast) for long stretches.
     std::vector<peer_id> toLose;
     for (auto& [id, r] : records_) {
+        if (r.isStatic) continue;
         if (r.state == peer_state::Connected || r.state == peer_state::Lost) continue;
         if (now - r.lastSeen > cfg_.peerLostTimeout) toLose.push_back(id);
     }
@@ -293,6 +338,9 @@ void peer_manager::tick() {
         emit_known_snapshot();
     }
 
+    // Keep persistent static-peer connections up.
+    maintain_static_peers();
+
     // Fallback: if isolated, re-dial seed peers.
     if (estab_.empty()) dial_seeds();
 
@@ -303,27 +351,78 @@ void peer_manager::schedule_tick() {
     loop_.add_timer(cfg_.heartbeatInterval, [this] { tick(); });
 }
 
+bool peer_manager::resolve_endpoint(const std::string& host, std::uint16_t port,
+                                    sockaddr_in& out) const {
+    // Fast path: a numeric IPv4 literal needs no DNS.
+    if (make_addr(host, port, out)) return true;
+    // Otherwise resolve the hostname. Blocking, but endpoints are few and this
+    // happens only at startup / on reconnect intervals. Fresh resolution each
+    // call lets dynamic-DNS / rolling-IP internet peers keep working.
+    addrinfo  hints{};
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = nullptr;
+    if (::getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return false;
+    out = *reinterpret_cast<sockaddr_in*>(res->ai_addr);
+    out.sin_port = htons(port);
+    ::freeaddrinfo(res);
+    return true;
+}
+
 void peer_manager::dial_seeds() {
     if (!running_) return;
     for (const auto& s : cfg_.seedPeers) {
         sockaddr_in addr{};
-        if (make_addr(s.host, s.port, addr)) {
-            start_dial_addr(addr);
+        if (resolve_endpoint(s.host, s.port, addr)) start_dial_addr(addr);
+    }
+}
+
+// --- static (persistent) peers ---------------------------------------------
+
+void peer_manager::maintain_static_peers() {
+    if (!running_) return;
+    const auto now = event_loop::clock::now();
+
+    for (std::size_t i = 0; i < static_targets_.size(); ++i) {
+        auto& t = static_targets_[i];
+
+        // Already connected to this peer (via this dial or any other link)?
+        if (t.learnedId && estab_.count(*t.learnedId)) {
+            t.attempts = 0;
             continue;
         }
-        // Resolve a hostname (blocking, but seeds are few and only at startup /
-        // while isolated).
-        addrinfo  hints{};
-        hints.ai_family   = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo* res = nullptr;
-        if (::getaddrinfo(s.host.c_str(), nullptr, &hints, &res) == 0 && res) {
-            auto* in = reinterpret_cast<sockaddr_in*>(res->ai_addr);
-            in->sin_port = htons(s.port);
-            start_dial_addr(*in);
-            ::freeaddrinfo(res);
-        }
+        if (t.dialing) continue;       // a dial is in flight
+        if (now < t.nextAttempt) continue; // still backing off
+
+        // Exponential backoff with jitter for the *next* attempt.
+        long long base = cfg_.reconnectBase.count();
+        int       att  = std::min(t.attempts, 20);
+        long long ms   = base << att;
+        long long cap  = cfg_.reconnectMax.count();
+        if (ms > cap || ms < 0) ms = cap;
+        std::uniform_int_distribution<long long> jit(0, std::max<long long>(1, ms / 5));
+        t.nextAttempt = now + std::chrono::milliseconds(ms + jit(rng_));
+        t.attempts++;
+
+        start_static_dial(i);
     }
+}
+
+void peer_manager::start_static_dial(std::size_t targetIdx) {
+    auto& t = static_targets_[targetIdx];
+    sockaddr_in addr{};
+    if (!resolve_endpoint(t.host, t.port, addr)) {
+        delegate_.on_error({error_category::Discovery, 0,
+                            "static peer DNS resolution failed: " + t.host, std::nullopt});
+        return; // backoff already armed; retry on a later tick
+    }
+    auto conn = std::make_unique<peer_connection>(loop_, *this, cfg_, self_,
+                                                  addr, rand_nonce());
+    peer_connection* p = conn.get();
+    conns_.push_back(std::move(conn));
+    t.dialing                = p;
+    static_dial_conn_[p]     = targetIdx;
+    p->start_connect(); // peer id learned at handshake; record created there
 }
 
 // --- deferred reaping -------------------------------------------------------
