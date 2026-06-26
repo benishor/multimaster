@@ -105,4 +105,9 @@ dial those directly in addition to (or instead of) multicast discovery.
 - **LAN-scoped by design**: multicast TTL defaults to 1 (stays on the local
   subnet). Cross-subnet meshes require `seedPeers`.
 - Linux-only (epoll, `accept4`, `eventfd`).
-- Tuned for tens of nodes. The full plan and rationale are in the design notes.
+- Tuned for tens of nodes.
+
+## Architecture
+
+For the internals — components, threading model, wire protocol, gossip routing,
+and self-healing reconnection — see [docs/architecture.md](docs/architecture.md).
