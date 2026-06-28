@@ -29,6 +29,9 @@ struct message_id {
 
 inline constexpr std::uint32_t kAnnounceMagic = 0x4D4D4341; // 'M''M''C''A'
 
+/// Announce flag bits.
+inline constexpr std::uint8_t kAnnounceFlagSecure = 0x01; // sender runs a secured mesh
+
 struct announce {
     std::uint8_t protocolVersion = 0;
     std::uint8_t flags           = 0;
@@ -48,21 +51,25 @@ std::optional<announce> decode_announce(std::span<const std::byte>);
 // ---------------------------------------------------------------------------
 
 enum class frame_type : std::uint8_t {
-    Hello      = 1,
-    HelloAck   = 2,
-    Heartbeat  = 3,
-    Data       = 4,
-    Goodbye    = 5,
-    Membership = 6, // adjacency gossip for mesh-wide membership
+    Hello       = 1,
+    HelloAck    = 2,
+    Heartbeat   = 3,
+    Data        = 4,
+    Goodbye     = 5,
+    Membership  = 6, // adjacency gossip for mesh-wide membership
+    AuthConfirm = 7, // PSK handshake confirmation (secured mesh only)
 };
 
-/// Body of a hello / HelloAck frame.
+/// Body of a hello / HelloAck frame. When `secure` is set the frame additionally
+/// carries the sender's per-connection X25519 ephemeral public key.
 struct hello {
     peer_id        nodeId;
     std::uint8_t  protocolVersion = 0;
     std::uint16_t tcpListenPort   = 0;
     std::string   groupName;
     std::uint64_t nonce = 0;
+    bool                        secure = false;
+    std::array<std::byte, 32>   ephPubKey{};
 };
 
 /// A decoded application-data frame. `payload` is a view into the caller's input
@@ -86,10 +93,11 @@ struct membership_record {
 
 /// Result of one decode attempt against a stream buffer.
 struct parsed_frame {
-    frame_type        type{};
-    hello             hello_msg;  // valid for hello / HelloAck
-    data_view         data;       // valid for Data
-    membership_record membership; // valid for Membership
+    frame_type                type{};
+    hello                     hello_msg;  // valid for hello / HelloAck
+    data_view                 data;       // valid for Data
+    membership_record         membership; // valid for Membership
+    std::array<std::byte, 32> auth_tag{}; // valid for AuthConfirm
 };
 
 enum class decode_status { NeedMore, Ok, Error };
@@ -98,6 +106,8 @@ enum class decode_status { NeedMore, Ok, Error };
 std::vector<std::byte> encode_hello(frame_type helloOrAck, const hello&);
 std::vector<std::byte> encode_heartbeat();
 std::vector<std::byte> encode_goodbye();
+/// Encode an AuthConfirm frame carrying a 32-byte handshake confirmation tag.
+std::vector<std::byte> encode_auth_confirm(const std::array<std::byte, 32>& tag);
 /// Encode a Data frame. `payload` is copied into the returned buffer.
 std::vector<std::byte> encode_data(const peer_id& src, const peer_id& dst,
                                   const message_id& msgId, std::uint8_t ttl,

@@ -28,6 +28,15 @@ struct mesh_config {
     std::string groupName       = "default"; // logical mesh segregation
     uint8_t     protocolVersion = 1;
 
+    // Pre-shared key. When non-empty, the mesh is *secured*: peer connections are
+    // mutually authenticated and encrypted (X25519 + ChaCha20-Poly1305, per-
+    // connection forward secrecy) and discovery announces carry a keyed MAC. All
+    // nodes in the mesh must share the same value, and it should be high-entropy
+    // (it is hashed to a key, not stretched — do not use a weak password). Empty
+    // (the default) keeps the plaintext behavior. Requires the library to be
+    // built with libsodium (MULTIMASTER_ENABLE_CRYPTO).
+    std::string psk;
+
     // --- discovery (UDP multicast) -----------------------------------------
     std::string multicastAddr   = "239.255.42.99";
     uint16_t    multicastPort   = 45454;

@@ -8,7 +8,10 @@
 // the public host:port of one or more peers as *static peers*. They are dialed
 // and the connection is kept up persistently (reconnect with backoff):
 //
-//   ./mm_chat [groupName] [--port N] [host:port ...]
+//   ./mm_chat [groupName] [--port N] [--psk SECRET] [host:port ...]
+//
+// Pass --psk SECRET (the same value on every node) to encrypt and authenticate
+// the mesh: only nodes holding the secret can join, and all traffic is encrypted.
 //
 // Example, two machines over the internet (peers find each other once either
 // side can reach the other; listing both ends on both is fine and de-duped):
@@ -61,6 +64,10 @@ int main(int argc, char** argv) {
             cfg.listenPort = static_cast<uint16_t>(std::strtoul(argv[++i], nullptr, 10));
             continue;
         }
+        if (a == "--psk" && i + 1 < argc) {
+            cfg.psk = argv[++i]; // non-empty => encrypted + authenticated mesh
+            continue;
+        }
         mm::seed_peer ep;
         if (parse_endpoint(a, ep)) {
             cfg.staticPeers.push_back(ep); // persistently maintained WAN peer
@@ -74,6 +81,8 @@ int main(int argc, char** argv) {
     mm::callbacks cb;
     cb.onPeerConnected    = [](mm::peer_id p) { std::cout << "[+ connected]    " << p.to_string() << "\n"; };
     cb.onPeerDisconnected = [](mm::peer_id p) { std::cout << "[- disconnected] " << p.to_string() << "\n"; };
+    cb.onMemberJoined    = [](mm::peer_id p) { std::cout << "[+ connected]    " << p.to_string() << "\n"; };
+    cb.onMemberLeft = [](mm::peer_id p) { std::cout << "[- disconnected] " << p.to_string() << "\n"; };
     cb.onPeerLost         = [](mm::peer_id p) { std::cout << "[x lost]         " << p.to_string() << "\n"; };
     cb.onMessage          = [](mm::peer_id from, mm::bytes data) {
         std::cout << from.to_string().substr(0, 8) << "> " << to_str(data) << "\n";
@@ -83,7 +92,7 @@ int main(int argc, char** argv) {
 
     mesh.start();
     std::cout << "this node: " << mesh.id().to_string() << "  port: " << mesh.listen_port()
-              << "  group: " << cfg.groupName << "\n";
+              << "  group: " << cfg.groupName << (cfg.psk.empty() ? "" : "  [secured]") << "\n";
     if (!cfg.staticPeers.empty()) {
         std::cout << "static peers:";
         for (const auto& s : cfg.staticPeers) std::cout << " " << s.host << ":" << s.port;

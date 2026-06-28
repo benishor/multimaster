@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(multimaster VERSION 0.1.0 LANGUAGES CXX)
+project(multimaster VERSION 0.2.0 LANGUAGES CXX)
 
 if(NOT DEFINED PROJECT_IS_TOP_LEVEL)
     # CMake < 3.21 compatibility.
@@ -16,6 +16,10 @@ option(MULTIMASTER_BUILD_EXAMPLES "Build multimaster examples" ${PROJECT_IS_TOP_
 # resulting binaries are portable across distributions (glibc stays dynamic, so
 # getaddrinfo/NSS — used for static-peer hostname resolution — keeps working).
 option(MULTIMASTER_STATIC_BINARIES "Statically link libstdc++/libgcc into executables" OFF)
+# Transport encryption / authentication via libsodium. When ON (default) the
+# library is built with PSK-based encryption; when libsodium is unavailable the
+# build continues without it and a PSK-configured mesh refuses to start.
+option(MULTIMASTER_ENABLE_CRYPTO "Build with libsodium transport encryption" ON)
 
 # Always a static archive (libmultimaster.a), regardless of BUILD_SHARED_LIBS,
 # so consumers statically link the library into their binary.
@@ -23,6 +27,7 @@ add_library(multimaster STATIC
     src/peer_id.cpp
     src/socket.cpp
     src/wire.cpp
+    src/crypto.cpp
     src/event_loop.cpp
     src/listener.cpp
     src/peer_connection.cpp
@@ -42,6 +47,36 @@ target_include_directories(multimaster
 
 find_package(Threads REQUIRED)
 target_link_libraries(multimaster PUBLIC Threads::Threads)
+
+# --- libsodium (optional transport encryption) ------------------------------
+set(MULTIMASTER_HAVE_CRYPTO OFF)
+if(MULTIMASTER_ENABLE_CRYPTO)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SODIUM IMPORTED_TARGET libsodium)
+    endif()
+    if(TARGET PkgConfig::SODIUM)
+        target_link_libraries(multimaster PUBLIC PkgConfig::SODIUM)
+        set(MULTIMASTER_HAVE_CRYPTO ON)
+    else()
+        find_library(SODIUM_LIBRARY sodium)
+        find_path(SODIUM_INCLUDE_DIR sodium.h)
+        if(SODIUM_LIBRARY AND SODIUM_INCLUDE_DIR)
+            target_include_directories(multimaster PRIVATE ${SODIUM_INCLUDE_DIR})
+            target_link_libraries(multimaster PUBLIC ${SODIUM_LIBRARY})
+            set(MULTIMASTER_HAVE_CRYPTO ON)
+        endif()
+    endif()
+    if(MULTIMASTER_HAVE_CRYPTO)
+        # PRIVATE: only crypto.cpp needs the macro; the rest of the codebase
+        # deals only in plain byte types and is crypto-agnostic.
+        target_compile_definitions(multimaster PRIVATE MULTIMASTER_HAVE_CRYPTO)
+    else()
+        message(WARNING
+            "libsodium not found: building multimaster WITHOUT transport encryption. "
+            "A mesh configured with a PSK will refuse to start.")
+    endif()
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(multimaster PRIVATE -Wall -Wextra -Wpedantic)

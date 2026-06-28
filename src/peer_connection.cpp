@@ -14,7 +14,7 @@ peer_connection::peer_connection(event_loop& loop, connection_listener& listener
                                std::uint64_t nonce)
     : loop_(loop), listener_(listener), cfg_(cfg), self_(self),
       sock_(std::move(sock)), peerAddr_(peerAddr), inbound_(true),
-      state_(conn_state::Handshaking), localNonce_(nonce),
+      state_(conn_state::Handshaking), localNonce_(nonce), secure_(self.secure),
       createdAt_(event_loop::clock::now()), lastRecv_(createdAt_), lastSend_(createdAt_) {
     (void)sock_.set_tcp_no_delay();
     (void)sock_.set_keep_alive();
@@ -27,7 +27,7 @@ peer_connection::peer_connection(event_loop& loop, connection_listener& listener
                                const sockaddr_in& target, std::uint64_t nonce)
     : loop_(loop), listener_(listener), cfg_(cfg), self_(self),
       peerAddr_(target), inbound_(false), state_(conn_state::ConnectingOut),
-      localNonce_(nonce), createdAt_(event_loop::clock::now()),
+      localNonce_(nonce), secure_(self.secure), createdAt_(event_loop::clock::now()),
       lastRecv_(createdAt_), lastSend_(createdAt_) {}
 
 peer_connection::~peer_connection() {
@@ -81,8 +81,20 @@ void peer_connection::send_hello() {
     h.tcpListenPort   = self_.listenPort;
     h.groupName       = self_.groupName;
     h.nonce           = localNonce_;
+    h.secure          = secure_;
+    if (secure_) {
+        ephKeys_     = crypto::gen_ephemeral(); // fresh per connection => forward secrecy
+        h.ephPubKey  = ephKeys_.pk;
+    }
     auto frame = encode_hello(inbound_ ? frame_type::HelloAck : frame_type::Hello, h);
     out_.append(frame.data(), frame.size());
+    lastSend_ = event_loop::clock::now();
+    flush_outbound();
+}
+
+void peer_connection::send_auth_confirm() {
+    auto frame = encode_auth_confirm(myConfirmTag_);
+    out_.append(frame.data(), frame.size()); // confirmation is sent in the clear
     lastSend_ = event_loop::clock::now();
     flush_outbound();
 }
@@ -132,76 +144,185 @@ void peer_connection::do_read() {
 }
 
 void peer_connection::parse_inbound() {
+    // Handshake frames (Hello / AuthConfirm) are always plaintext. In a secured
+    // mesh, once Established the remaining stream is encrypted records, so we stop
+    // reading plaintext from in_ and switch to the decrypt path.
+    if (!(secure_ && state_ == conn_state::Established)) {
+        if (!parse_plaintext()) return;
+    }
+    if (secure_ && state_ == conn_state::Established) {
+        if (!drain_records()) return;
+        parse_secure();
+    }
+}
+
+bool peer_connection::parse_plaintext() {
     for (;;) {
         parsed_frame frame;
-        std::size_t consumed = 0;
+        std::size_t  consumed = 0;
         std::span<const std::byte> view(in_.data(), in_.size());
         decode_status st = try_decode_frame(view, cfg_.maxMessageBytes, frame, consumed);
         if (st == decode_status::NeedMore) break;
         if (st == decode_status::Error) {
             fail(error_category::Protocol, 0, "malformed/oversized frame");
+            return false;
+        }
+        if (!dispatch(frame, consumed, in_)) return false;
+        // Secured handshake just completed: the rest of in_ is encrypted records.
+        if (secure_ && state_ == conn_state::Established) break;
+    }
+    return true;
+}
+
+bool peer_connection::drain_records() {
+    for (;;) {
+        if (in_.size() < 4) break;
+        const std::byte* p    = in_.data();
+        std::uint32_t    clen = (static_cast<std::uint32_t>(p[0]) << 24) |
+                             (static_cast<std::uint32_t>(p[1]) << 16) |
+                             (static_cast<std::uint32_t>(p[2]) << 8) |
+                             (static_cast<std::uint32_t>(p[3]));
+        if (clen < 16 || clen > cfg_.maxMessageBytes + 64) {
+            fail(error_category::Protocol, 0, "malformed encrypted record");
+            return false;
+        }
+        if (in_.size() < 4 + static_cast<std::size_t>(clen)) break; // need more
+        std::span<const std::byte> ct(p + 4, clen);
+        std::vector<std::byte>     pt;
+        if (!sess_->open(ct, pt)) {
+            fail(error_category::Crypto, 0, "record authentication failed");
+            return false;
+        }
+        plain_.append(pt.data(), pt.size());
+        in_.consume(4 + clen);
+    }
+    return true;
+}
+
+void peer_connection::parse_secure() {
+    for (;;) {
+        parsed_frame frame;
+        std::size_t  consumed = 0;
+        std::span<const std::byte> view(plain_.data(), plain_.size());
+        decode_status st = try_decode_frame(view, cfg_.maxMessageBytes, frame, consumed);
+        if (st == decode_status::NeedMore) break;
+        if (st == decode_status::Error) {
+            fail(error_category::Protocol, 0, "malformed decrypted frame");
             return;
         }
-
-        lastRecv_ = event_loop::clock::now();
-
-        switch (frame.type) {
-        case frame_type::Hello:
-        case frame_type::HelloAck: {
-            if (state_ != conn_state::Handshaking) {
-                // duplicate hello — ignore, but still consume
-                break;
-            }
-            const hello& h = frame.hello_msg;
-            if (h.protocolVersion != self_.protocolVersion || h.groupName != self_.groupName) {
-                fail(error_category::Protocol, 0, "protocol/group mismatch");
-                return;
-            }
-            peerId_         = h.nodeId;
-            peerListenPort_ = h.tcpListenPort;
-            peerNonce_      = h.nonce;
-            state_          = conn_state::Established;
-            in_.consume(consumed);
-            listener_.on_peer_handshake(*this, h);
-            if (dead_) return; // listener may have closed us (dial-race loser)
-            continue;
-        }
-        case frame_type::Heartbeat:
-            break; // lastRecv_ already updated
-        case frame_type::Goodbye:
-            in_.consume(consumed);
-            fail(error_category::Socket, 0, "peer said goodbye");
-            return;
-        case frame_type::Data:
-            if (state_ != conn_state::Established) {
-                fail(error_category::Protocol, 0, "data before handshake");
-                return;
-            }
-            // Deliver BEFORE consuming: frame.data.payload views the inbound
-            // buffer, which consume() may compact/clear.
-            listener_.on_peer_data(*this, frame.data);
-            if (dead_) return;
-            in_.consume(consumed);
-            continue;
-        case frame_type::Membership:
-            if (state_ != conn_state::Established) {
-                fail(error_category::Protocol, 0, "membership before handshake");
-                return;
-            }
-            // frame.membership owns its data (decoded into a vector), so consume
-            // order is safe.
-            in_.consume(consumed);
-            listener_.on_peer_membership(*this, frame.membership);
-            if (dead_) return;
-            continue;
-        }
-        in_.consume(consumed);
+        if (!dispatch(frame, consumed, plain_)) return;
     }
 }
 
-void peer_connection::send_raw(std::span<const std::byte> frame) {
+bool peer_connection::dispatch(parsed_frame& frame, std::size_t consumed, buffer& src) {
+    lastRecv_ = event_loop::clock::now();
+
+    switch (frame.type) {
+    case frame_type::Hello:
+    case frame_type::HelloAck:
+        return handle_hello(frame, consumed, src);
+    case frame_type::AuthConfirm:
+        return handle_auth_confirm(frame, consumed, src);
+    case frame_type::Heartbeat:
+        src.consume(consumed); // lastRecv_ already updated
+        return true;
+    case frame_type::Goodbye:
+        src.consume(consumed);
+        fail(error_category::Socket, 0, "peer said goodbye");
+        return false;
+    case frame_type::Data:
+        if (state_ != conn_state::Established) {
+            fail(error_category::Protocol, 0, "data before handshake");
+            return false;
+        }
+        // Deliver BEFORE consuming: frame.data.payload views `src`, which
+        // consume() may compact/clear.
+        listener_.on_peer_data(*this, frame.data);
+        if (dead_) return false;
+        src.consume(consumed);
+        return true;
+    case frame_type::Membership:
+        if (state_ != conn_state::Established) {
+            fail(error_category::Protocol, 0, "membership before handshake");
+            return false;
+        }
+        // frame.membership owns its data (decoded into a vector), so consume
+        // order is safe.
+        src.consume(consumed);
+        listener_.on_peer_membership(*this, frame.membership);
+        if (dead_) return false;
+        return true;
+    }
+    src.consume(consumed);
+    return true;
+}
+
+bool peer_connection::handle_hello(parsed_frame& frame, std::size_t consumed, buffer& src) {
+    if (state_ != conn_state::Handshaking) {
+        src.consume(consumed); // duplicate hello — ignore
+        return true;
+    }
+    const hello& h = frame.hello_msg;
+    if (h.protocolVersion != self_.protocolVersion || h.groupName != self_.groupName) {
+        fail(error_category::Protocol, 0, "protocol/group mismatch");
+        return false;
+    }
+    if (h.secure != secure_) {
+        fail(error_category::Protocol, 0, "security mode mismatch");
+        return false;
+    }
+    peerId_         = h.nodeId;
+    peerListenPort_ = h.tcpListenPort;
+    peerNonce_      = h.nonce;
+    src.consume(consumed);
+
+    if (!secure_) {
+        state_ = conn_state::Established;
+        listener_.on_peer_handshake(*this, h);
+        return !dead_; // listener may have closed us (dial-race loser)
+    }
+
+    // Secured: derive the session from the peer's ephemeral key, then prove
+    // possession of the PSK with a confirmation tag. The peer is not installed
+    // until its own confirmation verifies.
+    crypto::handshake_result hr;
+    if (!crypto::do_handshake(ephKeys_, h.ephPubKey, self_.groupKey, self_.groupName, hr)) {
+        fail(error_category::Crypto, 0, "key agreement failed");
+        return false;
+    }
+    sess_            = std::move(hr.session);
+    myConfirmTag_    = hr.myConfirmTag;
+    expectedPeerTag_ = hr.expectedPeerTag;
+    peerHello_       = h;
+    state_           = conn_state::AwaitingConfirm;
+    send_auth_confirm();
+    return !dead_;
+}
+
+bool peer_connection::handle_auth_confirm(parsed_frame& frame, std::size_t consumed, buffer& src) {
+    if (!secure_ || state_ != conn_state::AwaitingConfirm) {
+        fail(error_category::Protocol, 0, "unexpected auth confirm");
+        return false;
+    }
+    src.consume(consumed);
+    if (!crypto::verify_tag(frame.auth_tag, expectedPeerTag_)) {
+        fail(error_category::Crypto, 0, "authentication failed");
+        return false;
+    }
+    state_ = conn_state::Established;
+    listener_.on_peer_handshake(*this, peerHello_);
+    return !dead_; // listener may have closed us (dial-race loser)
+}
+
+void peer_connection::enqueue(std::span<const std::byte> frame) {
     if (dead_) return;
-    if (out_.size() + frame.size() > cfg_.maxOutboundQueueBytes) {
+    std::vector<std::byte>     sealed;
+    std::span<const std::byte> rec = frame;
+    if (secure_ && state_ == conn_state::Established) {
+        sealed = sess_->seal(frame);
+        rec    = std::span<const std::byte>(sealed.data(), sealed.size());
+    }
+    if (out_.size() + rec.size() > cfg_.maxOutboundQueueBytes) {
         switch (cfg_.overflowPolicy) {
         case mesh_config::overflow::Disconnect:
             fail(error_category::Backpressure, 0, "outbound queue overflow");
@@ -211,17 +332,19 @@ void peer_connection::send_raw(std::span<const std::byte> frame) {
                                    "dropped outbound (newest)", peerId_});
             return;
         case mesh_config::overflow::DropOldest:
-            // Drop from the head until the new frame fits.
-            while (!out_.empty() && out_.size() + frame.size() > cfg_.maxOutboundQueueBytes) {
+            // Drop from the head until the new record fits.
+            while (!out_.empty() && out_.size() + rec.size() > cfg_.maxOutboundQueueBytes) {
                 out_.consume(out_.size()); // coarse: clear backlog
             }
             break;
         }
     }
-    out_.append(frame.data(), frame.size());
+    out_.append(rec.data(), rec.size());
     lastSend_ = event_loop::clock::now();
     flush_outbound();
 }
+
+void peer_connection::send_raw(std::span<const std::byte> frame) { enqueue(frame); }
 
 void peer_connection::flush_outbound() {
     while (!out_.empty()) {
@@ -258,8 +381,7 @@ void peer_connection::maybe_heartbeat(event_loop::clock::time_point now,
 void peer_connection::close_gracefully() {
     if (dead_) return;
     auto bye = encode_goodbye();
-    out_.append(bye.data(), bye.size());
-    flush_outbound();
+    enqueue(std::span<const std::byte>(bye.data(), bye.size())); // sealed if secured; flushes
     mark_dead();
 }
 

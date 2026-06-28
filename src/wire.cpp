@@ -151,6 +151,17 @@ std::vector<std::byte> encode_hello(frame_type helloOrAck, const hello& h) {
     put_u16(b, h.tcpListenPort);
     put_str(b, h.groupName);
     put_u64(b, h.nonce);
+    put_u8(b, h.secure ? 1 : 0);
+    if (h.secure) put_bytes(b, h.ephPubKey.data(), h.ephPubKey.size());
+    patch_length(b);
+    return b;
+}
+
+std::vector<std::byte> encode_auth_confirm(const std::array<std::byte, 32>& tag) {
+    std::vector<std::byte> b;
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::AuthConfirm));
+    put_bytes(b, tag.data(), tag.size());
     patch_length(b);
     return b;
 }
@@ -230,6 +241,16 @@ decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMes
         out.hello_msg.tcpListenPort   = r.u16();
         out.hello_msg.groupName       = r.str();
         out.hello_msg.nonce           = r.u64();
+        out.hello_msg.secure          = r.u8() != 0;
+        if (out.hello_msg.secure) {
+            auto pk = r.take(out.hello_msg.ephPubKey.size());
+            if (r.ok()) std::memcpy(out.hello_msg.ephPubKey.data(), pk.data(), pk.size());
+        }
+        break;
+    }
+    case frame_type::AuthConfirm: {
+        auto tag = r.take(out.auth_tag.size());
+        if (r.ok()) std::memcpy(out.auth_tag.data(), tag.data(), tag.size());
         break;
     }
     case frame_type::Heartbeat:

@@ -80,11 +80,17 @@ void discovery::send_announce() {
     if (!usable_) return;
     announce a;
     a.protocolVersion = self_.protocolVersion;
-    a.flags           = 0;
+    a.flags           = self_.secure ? kAnnounceFlagSecure : 0;
     a.tcpListenPort   = self_.listenPort;
     a.nodeId          = self_.nodeId;
     a.groupName       = self_.groupName;
     auto dat = encode_announce(a);
+    if (self_.secure) {
+        // Append a keyed MAC so peers without the PSK cannot forge or enumerate.
+        auto tag = crypto::discovery_tag(std::span<const std::byte>(dat.data(), dat.size()),
+                                         self_.discoveryKey);
+        dat.insert(dat.end(), tag.begin(), tag.end());
+    }
     ::sendto(sock_.get(), dat.data(), dat.size(), 0,
              reinterpret_cast<sockaddr*>(&groupAddr_), sizeof groupAddr_);
 }
@@ -112,8 +118,19 @@ void discovery::on_io_events(std::uint32_t events) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) break;
             break;
         }
-        auto a = decode_announce(std::span<const std::byte>(buf.data(), static_cast<std::size_t>(n)));
+        std::span<const std::byte> datagram(buf.data(), static_cast<std::size_t>(n));
+        std::span<const std::byte> body = datagram;
+        if (self_.secure) {
+            // Verify and strip the trailing keyed MAC; drop on any mismatch.
+            if (datagram.size() <= 16) continue;
+            body          = datagram.first(datagram.size() - 16);
+            auto received = datagram.subspan(datagram.size() - 16, 16);
+            if (!crypto::discovery_verify(body, received, self_.discoveryKey)) continue;
+        }
+        auto a = decode_announce(body);
         if (!a) continue;
+        // Both ends must agree on whether the mesh is secured.
+        if (((a->flags & kAnnounceFlagSecure) != 0) != self_.secure) continue;
         if (a->protocolVersion != self_.protocolVersion) continue;
         if (a->groupName != self_.groupName) continue;
         if (a->nodeId == self_.nodeId) continue; // ignore our own echo

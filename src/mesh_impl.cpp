@@ -20,6 +20,19 @@ mesh_impl::~mesh_impl() { stop(); }
 void mesh_impl::set_callbacks(callbacks cb) { cb_ = std::move(cb); }
 
 void mesh_impl::start() {
+    // A non-empty PSK requests a secured mesh: derive the keys up front and
+    // refuse to run if the library was built without crypto support.
+    if (!cfg_.psk.empty()) {
+        if (!crypto::init()) {
+            on_error({error_category::Crypto, 0,
+                      "PSK configured but library built without libsodium support", std::nullopt});
+            return;
+        }
+        self_.secure       = true;
+        self_.groupKey     = crypto::derive_group_key(cfg_.psk);
+        self_.discoveryKey = crypto::derive_discovery_key(self_.groupKey);
+    }
+
     bool expected = false;
     if (!started_.compare_exchange_strong(expected, true)) return; // already started
 

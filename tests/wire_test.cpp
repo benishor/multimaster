@@ -66,6 +66,41 @@ TEST("hello round-trip via frame decode") {
     CHECK_EQ(out.hello_msg.nonce, h.nonce);
 }
 
+TEST("secure hello carries ephemeral pubkey") {
+    hello h;
+    h.nodeId          = id_from(3);
+    h.protocolVersion = 1;
+    h.tcpListenPort   = 5000;
+    h.groupName       = "g";
+    h.nonce           = 0x1234ULL;
+    h.secure          = true;
+    for (std::size_t i = 0; i < h.ephPubKey.size(); ++i)
+        h.ephPubKey[i] = static_cast<std::byte>(i + 100);
+
+    auto frame = encode_hello(frame_type::HelloAck, h);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK_EQ(static_cast<int>(out.type), static_cast<int>(frame_type::HelloAck));
+    CHECK(out.hello_msg.secure);
+    CHECK(out.hello_msg.ephPubKey == h.ephPubKey);
+}
+
+TEST("auth confirm round-trip") {
+    std::array<std::byte, 32> tag{};
+    for (std::size_t i = 0; i < tag.size(); ++i) tag[i] = static_cast<std::byte>(i * 7 + 1);
+    auto frame = encode_auth_confirm(tag);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK_EQ(static_cast<int>(out.type), static_cast<int>(frame_type::AuthConfirm));
+    CHECK(out.auth_tag == tag);
+}
+
 TEST("data round-trip preserves payload") {
     auto payload = bytes_of("hello mesh");
     message_id mid;

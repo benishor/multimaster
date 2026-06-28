@@ -25,6 +25,7 @@ guide). Everything here reflects the actual implementation in `src/`.
 15. [Lifecycle: startup & shutdown](#15-lifecycle-startup--shutdown)
 16. [End-to-end worked example](#16-end-to-end-worked-example)
 17. [Failure-scenario catalog](#17-failure-scenario-catalog)
+18. [Transport security (optional PSK)](#18-transport-security-optional-psk)
 
 ---
 
@@ -100,8 +101,9 @@ Durations are `std::chrono::milliseconds` and are interpreted against
 | Field | Default | Meaning |
 |---|---|---|
 | `nodeId` | random | This node's 128-bit id. |
-| `groupName` | `"default"` | Logical mesh name; only matching peers pair. |
+| `groupName` | `"default"` | Logical mesh name; only matching peers pair (not a secret). |
 | `protocolVersion` | `1` | Wire version; mismatch ⇒ peer rejected. |
+| `psk` | `""` (empty) | Pre-shared key. Non-empty ⇒ **secured mesh**: peers are mutually authenticated and all traffic is encrypted, and announces are MAC'd. Must match on every node; should be high-entropy. See §18. |
 | `multicastAddr` | `239.255.42.99` | Multicast group for discovery. |
 | `multicastPort` | `45454` | UDP port for announces. |
 | `multicastIface` | `""` | Local NIC IP to bind multicast to; `""` = kernel default. |
@@ -242,21 +244,26 @@ lives in `wire.cpp`; no other code parses bytes off the wire.
 offset  size  field
 0       4     magic = 0x4D4D4341  ('M','M','C','A')
 4       1     protocolVersion
-5       1     flags                 (reserved, currently 0)
+5       1     flags                 (bit0 = secured mesh; other bits reserved)
 6       2     tcpListenPort
 8       16    nodeId
 24      1     groupNameLen  (G, 0..255)
 25      G     groupName (UTF-8)
-              total size = 25 + G bytes
+[25+G   16    keyed MAC]            (secured mesh only; BLAKE2b under the discovery key)
+              total size = 25 + G (+16 when secured) bytes
 ```
 
 **Receiver validation** (`discovery::on_io_events` → `decode_announce`), datagram
 dropped unless **all** hold:
-1. `magic == 0x4D4D4341`;
-2. fully parses without overrun;
-3. `protocolVersion == ours`;
-4. `groupName == ours`;
-5. `nodeId != ours` (ignore multicast loopback echo of our own announce).
+1. on a secured mesh, the trailing 16-byte MAC verifies (else dropped before parse);
+2. `magic == 0x4D4D4341`;
+3. fully parses without overrun;
+4. the secure flag (bit0) matches our own mode (secured vs plaintext);
+5. `protocolVersion == ours`;
+6. `groupName == ours`;
+7. `nodeId != ours` (ignore multicast loopback echo of our own announce).
+
+The MAC and secure flag are covered in §18.
 
 A surviving datagram yields a *candidate* `(announce, source sockaddr_in)` handed
 to `peer_manager::on_discovered`.
@@ -273,7 +280,7 @@ offset  size  field
 ```
 
 `frame_type` values: `Hello=1`, `HelloAck=2`, `Heartbeat=3`, `Data=4`,
-`Goodbye=5`, `Membership=6`.
+`Goodbye=5`, `Membership=6`, `AuthConfirm=7` (secured mesh only).
 
 ### 5.3 Hello / HelloAck body
 
@@ -287,7 +294,19 @@ accepter sends `HelloAck`; both carry the same fields):
 1   groupNameLen (G)
 G   groupName
 8   nonce             # random per connection; disambiguates same-direction dups
+1   secure            # 1 ⇒ secured mesh; the ephemeral key follows
+[32 ephPubKey]        # X25519 ephemeral public key (secured mesh only; §18)
 ```
+
+### 5.3a AuthConfirm body (secured mesh only)
+
+```
+32  tag               # BLAKE2b confirmation tag proving possession of the PSK
+```
+
+Sent right after the Hello/HelloAck on a secured connection. The connection only
+becomes `Established` once the peer's tag verifies; a wrong tag drops the peer.
+See §18.
 
 ### 5.4 Heartbeat body
 
@@ -349,6 +368,25 @@ The write path (`flush_outbound`) sends from the outbound `buffer` until `EAGAIN
 then arms `EPOLLOUT`; when the buffer drains it disarms `EPOLLOUT`. `MSG_NOSIGNAL`
 suppresses `SIGPIPE` on writes to a closed peer.
 
+### 5.9 Encrypted record framing (secured mesh only)
+
+On a secured mesh, the handshake frames (Hello/HelloAck, AuthConfirm) are sent in
+the clear, but once the connection is `Established` every frame is sealed inside
+an **encrypted record**:
+
+```
+0   4    ciphertextLen
+4   ...  ciphertext = ChaCha20-Poly1305(plaintext frame) || 16-byte tag
+```
+
+The send path seals each frame before queuing it; the read path
+(`peer_connection::drain_records`) peeks `ciphertextLen`, waits like
+`try_decode_frame` until the whole record is buffered, decrypts it into a separate
+plaintext buffer, and then runs the ordinary frame decoder over that buffer. So
+everything above the record layer — framing, gossip, membership — is unchanged;
+encryption is a transparent shim on the byte stream. Construction and keying are
+detailed in §18.
+
 ---
 
 ## 6. Discovery
@@ -386,6 +424,13 @@ On `EPOLLIN`, `recvfrom` is looped until `EAGAIN`. Each datagram is validated
 (§5.1) and, if it survives, `peer_manager::on_discovered(announce, src)` is
 called. The dial-back address is the **source IP of the datagram** combined with
 the **`tcpListenPort` advertised inside it** (not the UDP source port).
+
+### 6.4 Authenticated discovery (secured mesh)
+
+On a secured mesh the announce sets the secure flag and appends a keyed MAC
+(BLAKE2b under a discovery key derived from the PSK). A receiver verifies the MAC
+and the flag before accepting (§5.1), so a host without the PSK can neither forge
+announces nor enumerate the mesh. See §18.
 
 ---
 
@@ -437,12 +482,23 @@ ConnectingOut ──(EPOLLOUT, SO_ERROR ok)──▶ Handshaking ──(valid He
 
 Both sides send their Hello/HelloAck and wait to receive the peer's. On receiving
 it (`parse_inbound`), the connection:
-1. rejects (→ Dead) if `protocolVersion` or `groupName` mismatch;
+1. rejects (→ Dead) if `protocolVersion`, `groupName`, or the secure flag mismatch;
 2. records the peer's `nodeId`, advertised `tcpListenPort`, and `nonce`;
-3. transitions to `Established` and notifies `peer_manager::on_peer_handshake`.
+3. **plaintext mesh**: transitions to `Established` and notifies
+   `peer_manager::on_peer_handshake`.
+
+**Secured mesh** inserts an extra step before `Established`: after the Hellos, the
+connection derives session keys from the peer's ephemeral key + PSK, moves to an
+`AwaitingConfirm` state, and sends an `AuthConfirm` tag. Only when the peer's
+AuthConfirm verifies does it reach `Established` and call `on_peer_handshake`; a
+bad tag drops the peer (`error_category::Crypto`). The full exchange is in §18.
+
+```
+... Handshaking ──(secured: valid Hello)──▶ AwaitingConfirm ──(valid AuthConfirm)──▶ Established
+```
 
 A connection that does not reach `Established` within `handshakeTimeout` is
-dropped by `tick()`.
+dropped by `tick()` (the `AwaitingConfirm` state is subject to the same timeout).
 
 ### 7.4 What `peer_manager` does on handshake
 
@@ -921,3 +977,89 @@ lists in `staticPeers` (`c.example.com:45000`).
 | Wall-clock jump (NTP) | All timing uses `steady_clock`; unaffected. |
 | Two independent meshes on one LAN | Separated by `groupName` (and/or `multicastPort`). |
 | `stop()` from inside a callback | Detected; performed asynchronously, no self-join deadlock. |
+| Intruder without the PSK (secured mesh) | Handshake key agreement / AuthConfirm fails → connection dropped (`error_category::Crypto`); forged/plaintext announces fail the MAC and are ignored (§18). |
+| Tampered or reordered encrypted record | AEAD authentication fails on decrypt → peer dropped (§18). |
+| Secured node meets plaintext node | Secure-flag mismatch in announce/Hello → they refuse to pair (§18). |
+| `psk` set but built without libsodium | `start()` reports `error_category::Crypto` and the mesh refuses to run. |
+
+---
+
+## 18. Transport security (optional PSK)
+
+By default the mesh is plaintext and unauthenticated. Setting `mesh_config::psk`
+to a non-empty shared secret — the **same value on every node** — turns on mutual
+authentication and encryption for the entire mesh. All cryptography is libsodium,
+confined to `crypto.{hpp,cpp}`; nothing else in the codebase includes `sodium.h`.
+The feature compiles only when `MULTIMASTER_ENABLE_CRYPTO` is ON (the default); a
+`psk`-configured mesh on a build without it reports `error_category::Crypto` and
+refuses to start.
+
+### 18.1 Keys
+
+At `start()` the PSK passphrase is hashed (keyed BLAKE2b) into a 32-byte master
+**group key** `K`; a separate **discovery key** is derived from `K`. Both are
+stored on `local_identity` and reused for every connection and announce. The PSK
+is hashed, **not** password-stretched, so it must be a high-entropy secret — it is
+the sole gate to the mesh. `groupName` still only segregates meshes and is not a
+secret.
+
+### 18.2 Per-connection handshake
+
+A Noise-NN-with-PSK style authenticated key exchange runs on every connection:
+
+```
+1. Each side makes a fresh ephemeral X25519 keypair (e_sk, e_pk).
+2. Hello/HelloAck carry e_pk in the clear (plus the secure flag).
+3. Both compute  dh = X25519(my_e_sk, peer_e_pk).
+4. Order the two pubkeys deterministically -> (pk_lo, pk_hi), then
+   master = BLAKE2b(key = K, dh || pk_lo || pk_hi || groupName).
+   Directional AEAD keys (tx/rx) are split from master; the lower-pubkey
+   side uses kA to send / kB to receive, the peer mirrors it.
+5. Each side sends AuthConfirm = BLAKE2b(key = confirm(master), my_e_pk).
+6. On receiving the peer's AuthConfirm, verify it == BLAKE2b(confirm(master),
+   peer_e_pk) in constant time.
+      match  -> Established; call on_peer_handshake (enters dial-race/routing)
+      no match -> drop (error_category::Crypto)
+```
+
+A peer **without** `K` derives a different `master`, so its confirmation tag never
+matches — it is rejected before it can enter the routing state. Mixing `dh`,
+both ephemeral keys, and `groupName` into `master` binds the transcript, so a
+man-in-the-middle cannot splice two handshakes. Because the keys are ephemeral and
+discarded after the handshake, each session has **forward secrecy**.
+
+`do_handshake` returns false (→ drop) on an invalid peer key (e.g. a low-order
+point), which libsodium's `crypto_scalarmult` detects.
+
+### 18.3 Record encryption
+
+After `Established`, every frame is sealed with
+`crypto_aead_chacha20poly1305_ietf` into the record envelope of §5.9. Each
+direction has its own key and a monotonic 64-bit **counter used as the nonce**
+(no nonce is sent on the wire). TCP's ordered, reliable byte stream keeps the two
+ends' counters in lockstep; a dropped, duplicated, reordered, or tampered record
+fails the AEAD tag check and drops the connection. Handshake frames themselves are
+never encrypted (they carry only public keys and a tag).
+
+### 18.4 Discovery authentication
+
+A secured announce sets flag bit0 and appends a 16-byte MAC =
+`BLAKE2b(key = discoveryKey, announceBytes)`. Receivers verify the MAC and the
+flag before accepting (§5.1 / §6.4). This prevents forgery and passive
+enumeration by hosts without the PSK. **Residual exposure:** a passive observer on
+the subnet can still *replay* a captured announce, revealing that a node exists —
+but cannot complete the TCP handshake without `K`, so it cannot join. (A timestamp
+in the MAC'd body would narrow the replay window; not currently implemented.)
+
+### 18.5 Mode negotiation
+
+The secure flag in both the announce and the Hello lets a secured node and a
+plaintext node detect the mismatch and refuse to pair, rather than hang or
+half-speak. A secured node drops plaintext announces, and vice versa.
+
+### 18.6 Limitations
+
+A single PSK gates the whole mesh: there is no per-node identity, certificate, or
+revocation, and key rotation is manual (change the PSK on every node and restart).
+Per-node keypairs with an allowlist would be the natural extension. See also the
+limitations in [architecture.md §11](architecture.md#11-known-limitations--future-directions).

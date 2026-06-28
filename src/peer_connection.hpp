@@ -1,6 +1,7 @@
 #pragma once
 
 #include "buffer.hpp"
+#include "crypto.hpp"
 #include "event_loop.hpp"
 #include "socket.hpp"
 #include "wire.hpp"
@@ -9,18 +10,24 @@
 #include "multimaster/peer_id.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include <netinet/in.h>
 
 namespace mm {
 
-/// Identity this node advertises to peers in its hello.
+/// Identity this node advertises to peers in its hello. When `secure` is set the
+/// derived `groupKey` / `discoveryKey` authenticate and encrypt the transport
+/// and discovery announces respectively.
 struct local_identity {
     peer_id        nodeId;
     std::string   groupName;
     std::uint8_t  protocolVersion = 1;
     std::uint16_t listenPort      = 0;
+    bool          secure          = false;
+    crypto::key32 groupKey{};
+    crypto::key32 discoveryKey{};
 };
 
 class peer_connection;
@@ -54,7 +61,7 @@ public:
 /// connection_listener::onPeerClosed so the owner can reap after the event batch.
 class peer_connection : public io_handler {
 public:
-    enum class conn_state { ConnectingOut, Handshaking, Established, Dead };
+    enum class conn_state { ConnectingOut, Handshaking, AwaitingConfirm, Established, Dead };
 
     /// Construct around an already-connected, accepted socket (inbound).
     peer_connection(event_loop& loop, connection_listener& listener,
@@ -98,10 +105,18 @@ public:
 
 private:
     void send_hello();
+    void send_auth_confirm();
     void on_connect_complete();
     void do_read();
     void parse_inbound();
+    bool parse_plaintext();          // decode plaintext frames straight from in_
+    bool drain_records();            // decrypt records from in_ into plain_
+    void parse_secure();             // decode plaintext frames from plain_
+    bool dispatch(parsed_frame& f, std::size_t consumed, buffer& src); // false => dead
+    bool handle_hello(parsed_frame& f, std::size_t consumed, buffer& src);
+    bool handle_auth_confirm(parsed_frame& f, std::size_t consumed, buffer& src);
     void flush_outbound();
+    void enqueue(std::span<const std::byte> frame); // seal if secure+established, else raw
     void update_epoll();
     void fail(error_category cat, int err, std::string what);
     void mark_dead();
@@ -120,6 +135,15 @@ private:
     std::uint16_t peerListenPort_ = 0;
     std::uint64_t localNonce_     = 0;
     std::uint64_t peerNonce_      = 0;
+
+    // --- security (active only when self_.secure) ---------------------------
+    bool                              secure_ = false;
+    crypto::ephemeral_keypair         ephKeys_;
+    std::optional<crypto::secure_session> sess_;
+    crypto::tag32                     myConfirmTag_{};
+    crypto::tag32                     expectedPeerTag_{};
+    hello                             peerHello_;   // saved for post-auth handshake
+    buffer                            plain_;       // decrypted inbound frame bytes
 
     buffer in_;
     buffer out_;

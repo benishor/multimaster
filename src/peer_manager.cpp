@@ -332,6 +332,7 @@ void peer_manager::tick() {
             if (now - c->last_recv() > cfg_.heartbeatTimeout) c->close_gracefully();
             break;
         case peer_connection::conn_state::Handshaking:
+        case peer_connection::conn_state::AwaitingConfirm:
         case peer_connection::conn_state::ConnectingOut:
             if (now - c->created_at() > cfg_.handshakeTimeout) c->close_gracefully();
             break;

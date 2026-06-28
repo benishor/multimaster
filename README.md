@@ -13,8 +13,12 @@ and surface callbacks for every meaningful event.
 - **Flexible messaging** — send opaque bytes by `broadcast()` (everyone) or
   `send(peerId, …)` (one node, relayed if not directly connected). You serialize
   however you like.
-- **Zero runtime dependencies** — raw POSIX sockets + a single epoll IO thread.
-  Linux-first. Only `pthreads` is linked.
+- **Optional encryption** — set a pre-shared key (`mesh_config::psk`) to mutually
+  authenticate peers and encrypt all traffic (X25519 + ChaCha20-Poly1305, with
+  per-connection forward secrecy). Off by default; see [Security](#security).
+- **Minimal dependencies** — raw POSIX sockets + a single epoll IO thread.
+  Linux-first. Only `pthreads` is linked, plus **libsodium** when encryption is
+  enabled (the default build; it can be turned off, see [Security](#security)).
 
 ## Build
 
@@ -156,6 +160,37 @@ cfg.seedPeers.push_back({"10.0.0.5", 45000});           // bootstrap fallback on
 
 A peer found both via multicast and via a static/seed entry is de-duplicated
 automatically (the connection-handshake logic keeps a single link per node).
+
+## Security
+
+By default the mesh is **unauthenticated and unencrypted** — any host that can
+reach a node (on the subnet, or a static peer's TCP port) may join and read or
+inject traffic. To lock the mesh down, give every node the **same pre-shared
+key**:
+
+```cpp
+mm::mesh_config cfg;
+cfg.psk = "a-high-entropy-shared-secret"; // same on every node
+```
+
+With a non-empty `psk`:
+
+- **Mutual authentication** — each connection runs an X25519 key exchange bound
+  to the PSK; a peer that doesn't hold the key fails the handshake and is dropped
+  (`error_category::Crypto`). Mismatched secured/plaintext nodes refuse to pair.
+- **Encryption + integrity** — every frame is sealed with ChaCha20-Poly1305.
+  Ephemeral per-connection keys give **forward secrecy**.
+- **Authenticated discovery** — multicast announces carry a keyed MAC, so peers
+  without the key can't forge them or enumerate the mesh.
+
+The PSK is hashed to a key, not stretched — use a high-entropy secret, and share
+it with every node (it complements `groupName`, which only segregates meshes and
+is *not* a secret). Key rotation is manual: change the PSK everywhere and restart.
+
+Encryption requires **libsodium**. It is found automatically and enabled by
+default (`-DMULTIMASTER_ENABLE_CRYPTO=ON`). Build with
+`-DMULTIMASTER_ENABLE_CRYPTO=OFF` to drop the dependency entirely; a mesh
+configured with a `psk` then refuses to start.
 
 ## Notes & limits
 

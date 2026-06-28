@@ -14,6 +14,7 @@ enum class error_category {
     Protocol,     // a peer sent something malformed / oversized
     Discovery,    // multicast setup or send/recv failure
     Backpressure, // an outbound queue overflowed
+    Crypto,       // handshake authentication or record decryption failed
     Internal,     // a library invariant was violated
 };
 
