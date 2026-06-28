@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace mm {
@@ -67,6 +68,15 @@ public:
     [[nodiscard]] std::vector<peer_id> connected_peers() const;
     [[nodiscard]] std::vector<peer_id> known_peers() const;
     [[nodiscard]] std::vector<peer_id> members() const;
+
+    /// Human-readable name for a node, or "" if unknown. Resolves to the local
+    /// label (from trustedKeys) if set, otherwise the peer's signed self-declared
+    /// name. Only meaningful on an identity-enabled mesh.
+    [[nodiscard]] std::string node_name(const peer_id&) const;
+
+    /// This node's Ed25519 identity public key as hex (""  if no identity is
+    /// configured). Meaningful after start(). Peers add it to their trustedKeys.
+    [[nodiscard]] std::string identity_public_key() const;
 
 private:
     std::unique_ptr<mesh_impl> impl_;

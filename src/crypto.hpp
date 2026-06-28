@@ -78,6 +78,36 @@ struct handshake_result {
     tag32          expectedPeerTag{}; // compare against the peer's confirm tag
 };
 
+// --- node identity (Ed25519, self-certifying) -------------------------------
+
+using id_pubkey = std::array<std::byte, 32>; // Ed25519 public key
+using id_seckey = std::array<std::byte, 64>; // Ed25519 secret key (libsodium form)
+using seed32    = std::array<std::byte, 32>; // identity seed (persisted form)
+using id_sig    = std::array<std::byte, 64>; // Ed25519 detached signature
+
+struct identity_keypair {
+    id_pubkey pk{};
+    id_seckey sk{};
+};
+
+/// Generate a random Ed25519 identity keypair.
+identity_keypair gen_identity();
+
+/// Deterministically derive an identity keypair from a 32-byte seed (the
+/// persisted form).
+identity_keypair identity_from_seed(const seed32& seed);
+
+/// The first half of an Ed25519 secret key is its seed; extract it for storage.
+seed32 seed_of(const identity_keypair&);
+
+/// Derive a 16-byte node id from an identity public key (BLAKE2b, truncated).
+/// Returned as raw bytes so peer_id stays crypto-agnostic.
+std::array<std::byte, 16> id_from_identity(const id_pubkey&);
+
+/// Sign / verify a message with an Ed25519 identity key.
+id_sig sign(std::span<const std::byte> msg, const id_seckey& sk);
+bool   verify_sig(std::span<const std::byte> msg, const id_sig& sig, const id_pubkey& pk);
+
 /// Perform the X25519 + PSK key agreement. Both peers, given each other's
 /// ephemeral public key and the shared group key, derive identical directional
 /// session keys and matching confirmation tags. Returns false on an invalid

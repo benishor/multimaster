@@ -16,6 +16,9 @@ and surface callbacks for every meaningful event.
 - **Optional encryption** — set a pre-shared key (`mesh_config::psk`) to mutually
   authenticate peers and encrypt all traffic (X25519 + ChaCha20-Poly1305, with
   per-connection forward secrecy). Off by default; see [Security](#security).
+- **Self-certifying identity** — give nodes a persistent Ed25519 keypair so a
+  `peer_id` *proves* ownership of a key (no impersonation), with an allowlist for
+  per-node admit/revoke and signed, gossiped node names. See [Security](#security).
 - **Minimal dependencies** — raw POSIX sockets + a single epoll IO thread.
   Linux-first. Only `pthreads` is linked, plus **libsodium** when encryption is
   enabled (the default build; it can be turned off, see [Security](#security)).
@@ -191,6 +194,37 @@ Encryption requires **libsodium**. It is found automatically and enabled by
 default (`-DMULTIMASTER_ENABLE_CRYPTO=ON`). Build with
 `-DMULTIMASTER_ENABLE_CRYPTO=OFF` to drop the dependency entirely; a mesh
 configured with a `psk` then refuses to start.
+
+### Node identity (impersonation resistance + names)
+
+The PSK proves a peer belongs to the group, but not *which* node it is — by
+default `nodeId` is a random value a node merely claims, so any group member could
+impersonate another. Give each node a **self-certifying identity** to close that
+gap (complements the PSK; requires one):
+
+```cpp
+mm::mesh_config cfg;
+cfg.psk          = "a-high-entropy-shared-secret";
+cfg.identityFile = "/var/lib/myapp/node.key"; // persistent Ed25519 seed (created if absent)
+cfg.nodeName     = "gateway-eu";              // signed, gossiped nickname (advisory)
+```
+
+With an identity configured:
+
+- The node has a long-lived **Ed25519 keypair** and `nodeId` becomes a hash of
+  its public key — the id *proves* ownership of the key, so peers cannot
+  impersonate one another. The id is **stable across restarts** (the key persists
+  in `identityFile`).
+- During the handshake each side **signs the transcript**; a peer that can't sign
+  for its claimed key is rejected (`error_category::Identity`).
+- **Per-node admit/revoke:** list the keys you accept in `trustedKeys`; removing a
+  key revokes that node — no PSK rotation needed. An empty list accepts any node
+  that presents a valid identity. `requireIdentity` (default true) rejects peers
+  that present none.
+- **Names:** a node's signed `nodeName` is gossiped mesh-wide and exposed via
+  `mesh::node_name(peer_id)`; an operator can override any name with a local label
+  in `trustedKeys` (`{publicKeyHex, label}`). Print your own key with
+  `mesh::identity_public_key()` so peers can add it to their `trustedKeys`.
 
 ## Notes & limits
 

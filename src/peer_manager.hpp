@@ -39,6 +39,7 @@ public:
     virtual void connected_snapshot(std::vector<peer_id>)             = 0;
     virtual void known_snapshot(std::vector<peer_id>)                 = 0;
     virtual void members_snapshot(std::vector<peer_id>)               = 0;
+    virtual void names_snapshot(std::unordered_map<peer_id, std::string>) = 0;
 };
 
 /// Owns all peer connections and the mesh's logical state: discovery → dial →
@@ -69,6 +70,7 @@ public:
     void on_peer_handshake(peer_connection& c, const hello& peer) override;
     void on_peer_data(peer_connection& c, const data_view& view) override;
     void on_peer_membership(peer_connection& c, const membership_record& rec) override;
+    void on_peer_identity(peer_connection& c, const identity_record& rec) override;
     void on_peer_closed(peer_connection& c) override;
     void report_error(const error& e) override;
 
@@ -121,6 +123,11 @@ private:
     void            update_local_membership();
     void            emit_connected_snapshot();
     void            emit_known_snapshot();
+    void            emit_names_snapshot();
+    // Signed node-name gossip (parallels membership).
+    identity_record        make_self_id_record();
+    void                   flood_self_identity(int except_fd);
+    std::vector<std::byte> id_record_msg(std::uint64_t version, const std::string& name) const;
     std::uint64_t   rand_nonce();
     bool            keep_existing(peer_connection* existing, peer_connection* neu,
                                  const peer_id& peer) const;
@@ -138,6 +145,11 @@ private:
 
     std::vector<static_target>                       static_targets_;
     std::unordered_map<peer_connection*, std::size_t> static_dial_conn_; // dial -> target idx
+
+    std::unordered_map<peer_id, std::string>         names_;      // verified peer names by id
+    std::unordered_map<peer_id, std::uint64_t>       idVersions_; // identity-gossip dedup
+    std::uint64_t                                    selfIdVersion_ = 0;
+    event_loop::clock::time_point                    lastIdFlood_{};
 
     std::vector<peer_connection*> reap_;
     bool                         reapScheduled_ = false;

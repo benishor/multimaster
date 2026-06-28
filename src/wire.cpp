@@ -153,15 +153,23 @@ std::vector<std::byte> encode_hello(frame_type helloOrAck, const hello& h) {
     put_u64(b, h.nonce);
     put_u8(b, h.secure ? 1 : 0);
     if (h.secure) put_bytes(b, h.ephPubKey.data(), h.ephPubKey.size());
+    put_u8(b, h.hasIdentity ? 1 : 0);
+    if (h.hasIdentity) {
+        put_bytes(b, h.idPubKey.data(), h.idPubKey.size());
+        put_str(b, h.nodeName);
+    }
     patch_length(b);
     return b;
 }
 
-std::vector<std::byte> encode_auth_confirm(const std::array<std::byte, 32>& tag) {
+std::vector<std::byte> encode_auth_confirm(const std::array<std::byte, 32>& tag, bool hasSig,
+                                          const std::array<std::byte, 64>& sig) {
     std::vector<std::byte> b;
     put_u32(b, 0);
     put_u8(b, static_cast<std::uint8_t>(frame_type::AuthConfirm));
     put_bytes(b, tag.data(), tag.size());
+    put_u8(b, hasSig ? 1 : 0);
+    if (hasSig) put_bytes(b, sig.data(), sig.size());
     patch_length(b);
     return b;
 }
@@ -214,6 +222,19 @@ std::vector<std::byte> encode_membership(const membership_record& m) {
     return b;
 }
 
+std::vector<std::byte> encode_identity(const identity_record& r) {
+    std::vector<std::byte> b;
+    b.reserve(4 + 1 + 32 + 8 + 64 + 1 + r.name.size());
+    put_u32(b, 0);
+    put_u8(b, static_cast<std::uint8_t>(frame_type::IdentityRecord));
+    put_bytes(b, r.idPubKey.data(), r.idPubKey.size());
+    put_u64(b, r.version);
+    put_bytes(b, r.signature.data(), r.signature.size());
+    put_str(b, r.name);
+    patch_length(b);
+    return b;
+}
+
 decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMessageBytes,
                             parsed_frame& out, std::size_t& consumed) {
     if (in.size() < 4) return decode_status::NeedMore;
@@ -246,11 +267,22 @@ decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMes
             auto pk = r.take(out.hello_msg.ephPubKey.size());
             if (r.ok()) std::memcpy(out.hello_msg.ephPubKey.data(), pk.data(), pk.size());
         }
+        out.hello_msg.hasIdentity = r.u8() != 0;
+        if (out.hello_msg.hasIdentity) {
+            auto idpk = r.take(out.hello_msg.idPubKey.size());
+            if (r.ok()) std::memcpy(out.hello_msg.idPubKey.data(), idpk.data(), idpk.size());
+            out.hello_msg.nodeName = r.str();
+        }
         break;
     }
     case frame_type::AuthConfirm: {
         auto tag = r.take(out.auth_tag.size());
         if (r.ok()) std::memcpy(out.auth_tag.data(), tag.data(), tag.size());
+        out.has_auth_sig = r.u8() != 0;
+        if (out.has_auth_sig) {
+            auto sig = r.take(out.auth_sig.size());
+            if (r.ok()) std::memcpy(out.auth_sig.data(), sig.data(), sig.size());
+        }
         break;
     }
     case frame_type::Heartbeat:
@@ -275,6 +307,15 @@ decode_status try_decode_frame(std::span<const std::byte> in, std::size_t maxMes
             r.id(n);
             out.membership.neighbors.push_back(n);
         }
+        break;
+    }
+    case frame_type::IdentityRecord: {
+        auto pk = r.take(out.identity.idPubKey.size());
+        if (r.ok()) std::memcpy(out.identity.idPubKey.data(), pk.data(), pk.size());
+        out.identity.version = r.u64();
+        auto sig = r.take(out.identity.signature.size());
+        if (r.ok()) std::memcpy(out.identity.signature.data(), sig.data(), sig.size());
+        out.identity.name = r.str();
         break;
     }
     default:

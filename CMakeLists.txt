@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(multimaster VERSION 0.2.0 LANGUAGES CXX)
+project(multimaster VERSION 0.3.0 LANGUAGES CXX)
 
 if(NOT DEFINED PROJECT_IS_TOP_LEVEL)
     # CMake < 3.21 compatibility.

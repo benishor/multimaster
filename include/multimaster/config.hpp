@@ -18,6 +18,14 @@ struct seed_peer {
     uint16_t    port; // the peer's TCP listen port
 };
 
+/// An entry in the node-identity allowlist: an Ed25519 public key (64 hex chars)
+/// this node is willing to admit, plus an optional human-readable local label
+/// that overrides whatever name the keyholder advertises.
+struct trusted_node {
+    std::string publicKeyHex; // 64-hex-char Ed25519 public key
+    std::string label;        // optional local display label (may be empty)
+};
+
 /// All tunables for a mesh node. Defaults are sensible for a small LAN mesh
 /// (tens of nodes). Durations use steady_clock semantics internally.
 struct mesh_config {
@@ -36,6 +44,35 @@ struct mesh_config {
     // (the default) keeps the plaintext behavior. Requires the library to be
     // built with libsodium (MULTIMASTER_ENABLE_CRYPTO).
     std::string psk;
+
+    // --- node identity (self-certifying; complements the PSK) ---------------
+    // When an identity is configured this node gets a long-lived Ed25519 keypair
+    // and its `nodeId` becomes a hash of the public key, so the id *proves*
+    // ownership of the key — peers can no longer impersonate one another. Identity
+    // is layered on the secured handshake and therefore requires a non-empty
+    // `psk` (a secured mesh); configuring it without one is a start-time error.
+
+    // Path to this node's identity seed (32 bytes, stored hex, mode 0600).
+    // Loaded if present, otherwise generated and written. Non-empty enables
+    // identity. The derived nodeId persists across restarts.
+    std::string identityFile;
+    // Inline identity seed (64 hex chars). Overrides identityFile when set;
+    // convenient for tests and ephemeral nodes. Also enables identity.
+    std::string identitySeedHex;
+
+    // This node's self-declared nickname, signed by its identity key and gossiped
+    // across the mesh. Advisory only (not unique); nodeId stays canonical.
+    std::string nodeName;
+
+    // Allowlist of admissible node public keys (+ optional local labels). When
+    // non-empty, only peers whose identity key is listed are admitted — removing
+    // a key revokes that node without rotating the PSK. Empty ⇒ any peer with a
+    // valid (self-consistent, signed) identity is accepted.
+    std::vector<trusted_node> trustedKeys;
+
+    // When this node has an identity, reject peers that present none. Set false to
+    // allow a mixed/transitional mesh of identity and legacy nodes.
+    bool requireIdentity = true;
 
     // --- discovery (UDP multicast) -----------------------------------------
     std::string multicastAddr   = "239.255.42.99";

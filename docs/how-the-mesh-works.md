@@ -26,6 +26,7 @@ guide). Everything here reflects the actual implementation in `src/`.
 16. [End-to-end worked example](#16-end-to-end-worked-example)
 17. [Failure-scenario catalog](#17-failure-scenario-catalog)
 18. [Transport security (optional PSK)](#18-transport-security-optional-psk)
+19. [Node identity (optional, self-certifying)](#19-node-identity-optional-self-certifying)
 
 ---
 
@@ -57,7 +58,9 @@ sequential code reacting to socket events and timers.
 
 A `peer_id` is **128 bits** (`std::array<std::byte,16>`), generated randomly at
 construction via `peer_id::generate()` (uses `std::random_device`), unless the
-caller pins one in `mesh_config::nodeId`.
+caller pins one in `mesh_config::nodeId`. On an **identity mesh** it is instead
+derived as `truncate₁₆(BLAKE2b(Ed25519 public key))`, making it self-certifying
+and stable across restarts (§19).
 
 - Rendered as 32 lowercase hex chars (`to_string`), parsed back by `from_string`
   (dashes allowed and ignored).
@@ -104,6 +107,11 @@ Durations are `std::chrono::milliseconds` and are interpreted against
 | `groupName` | `"default"` | Logical mesh name; only matching peers pair (not a secret). |
 | `protocolVersion` | `1` | Wire version; mismatch ⇒ peer rejected. |
 | `psk` | `""` (empty) | Pre-shared key. Non-empty ⇒ **secured mesh**: peers are mutually authenticated and all traffic is encrypted, and announces are MAC'd. Must match on every node; should be high-entropy. See §18. |
+| `identityFile` | `""` | Path to a persistent Ed25519 identity seed (created if absent, 0600). Non-empty ⇒ **identity mesh** (requires a PSK). nodeId is derived from the key. See §19. |
+| `identitySeedHex` | `""` | Inline 32-byte seed (hex); overrides `identityFile`. For tests/ephemeral nodes. |
+| `nodeName` | `""` | This node's self-declared nickname; signed and gossiped. Advisory. |
+| `trustedKeys` | empty | Allowlist of admissible identity public keys (+ optional local labels). Empty ⇒ admit any valid identity; non-empty ⇒ per-node admit/revoke. |
+| `requireIdentity` | `true` | On an identity mesh, reject peers that present no identity. |
 | `multicastAddr` | `239.255.42.99` | Multicast group for discovery. |
 | `multicastPort` | `45454` | UDP port for announces. |
 | `multicastIface` | `""` | Local NIC IP to bind multicast to; `""` = kernel default. |
@@ -280,7 +288,8 @@ offset  size  field
 ```
 
 `frame_type` values: `Hello=1`, `HelloAck=2`, `Heartbeat=3`, `Data=4`,
-`Goodbye=5`, `Membership=6`, `AuthConfirm=7` (secured mesh only).
+`Goodbye=5`, `Membership=6`, `AuthConfirm=7` (secured mesh only),
+`IdentityRecord=8` (identity mesh only; §19).
 
 ### 5.3 Hello / HelloAck body
 
@@ -296,17 +305,22 @@ G   groupName
 8   nonce             # random per connection; disambiguates same-direction dups
 1   secure            # 1 ⇒ secured mesh; the ephemeral key follows
 [32 ephPubKey]        # X25519 ephemeral public key (secured mesh only; §18)
+1   hasIdentity       # 1 ⇒ identity mesh; the identity fields follow
+[32 idPubKey]         # Ed25519 identity public key (identity mesh only; §19)
+[1+N nodeName]        # length-prefixed signed nickname (identity mesh only)
 ```
 
 ### 5.3a AuthConfirm body (secured mesh only)
 
 ```
 32  tag               # BLAKE2b confirmation tag proving possession of the PSK
+1   hasSig            # 1 ⇒ an identity signature follows
+[64 signature]        # Ed25519 signature over the handshake transcript (§19)
 ```
 
 Sent right after the Hello/HelloAck on a secured connection. The connection only
-becomes `Established` once the peer's tag verifies; a wrong tag drops the peer.
-See §18.
+becomes `Established` once the peer's tag (and, on an identity mesh, signature)
+verifies; a wrong tag or signature drops the peer. See §18 and §19.
 
 ### 5.4 Heartbeat body
 
@@ -344,6 +358,21 @@ N*16 neighbors        # originId's direct neighbors
 Flooded across the mesh so every node can derive the full membership; see §11.6.
 Loop-free because a record `(origin, version)` is accepted/forwarded only if
 `version` is newer than the last one stored for that origin.
+
+### 5.7a IdentityRecord body (identity mesh only)
+
+```
+32  idPubKey          # the origin's Ed25519 identity public key
+8   version           # monotonic per origin (restart-safe; ordering tag)
+64  signature         # Ed25519 over "mm-idrec-v1" || version || name
+1   nameLen (L)
+L   name              # the origin's self-declared nickname
+```
+
+A signed node-name record, flooded like membership (§5.7) so every node can learn
+and verify the names of non-direct members. The origin's `peer_id` is the hash of
+`idPubKey`; the signature is verified against `idPubKey` before the name is stored
+or relayed. See §19.
 
 ### 5.8 Framing & partial I/O
 
@@ -981,6 +1010,10 @@ lists in `staticPeers` (`c.example.com:45000`).
 | Tampered or reordered encrypted record | AEAD authentication fails on decrypt → peer dropped (§18). |
 | Secured node meets plaintext node | Secure-flag mismatch in announce/Hello → they refuse to pair (§18). |
 | `psk` set but built without libsodium | `start()` reports `error_category::Crypto` and the mesh refuses to run. |
+| Impersonation: a peer claims another's nodeId (identity mesh) | id ≠ hash(its key) or signature fails ⇒ rejected (`error_category::Identity`); §19. |
+| Untrusted/revoked node (identity mesh) | key absent from `trustedKeys` ⇒ rejected at handshake; removing a key revokes without PSK rotation; §19. |
+| Identity-less peer where `requireIdentity` | rejected at handshake (`error_category::Identity`). |
+| Forged gossiped name | IdentityRecord signature is verified against the key before storing/relaying; forgeries dropped (§19). |
 
 ---
 
@@ -1059,7 +1092,74 @@ half-speak. A secured node drops plaintext announces, and vice versa.
 
 ### 18.6 Limitations
 
-A single PSK gates the whole mesh: there is no per-node identity, certificate, or
-revocation, and key rotation is manual (change the PSK on every node and restart).
-Per-node keypairs with an allowlist would be the natural extension. See also the
-limitations in [architecture.md §11](architecture.md#11-known-limitations--future-directions).
+A single PSK gates the whole mesh and encrypts the channel. Per-node *identity*
+(who each peer is) is layered on top — see §19. Key rotation for the PSK itself is
+manual (change it on every node and restart). See also the limitations in
+[architecture.md §11](architecture.md#11-known-limitations--future-directions).
+
+---
+
+## 19. Node identity (optional, self-certifying)
+
+The PSK (§18) proves a peer belongs to the group; it does not prove *which* node
+it is. By default `nodeId` is a value a node merely claims in its Hello, so any
+group member could impersonate another. Configuring an identity closes that gap.
+It **complements** the PSK and requires one (a `psk`-less identity mesh refuses to
+start with `error_category::Identity`).
+
+### 19.1 Keys and the derived id
+
+Set `identityFile` (or `identitySeedHex`) to enable identity. At `start()` the
+32-byte seed is loaded — or generated and persisted (mode 0600) — and expanded
+into an **Ed25519** keypair. The node's id becomes
+`nodeId = truncate₁₆(BLAKE2b(public key))`, overriding `cfg.nodeId`. Because the
+key persists, the id is **stable across restarts**, and because it is a hash of
+the key it is **self-certifying**: only the keyholder can have that id.
+
+### 19.2 Handshake binding
+
+Identity rides on the secured handshake (§18.2). The Hello additionally carries
+the Ed25519 public key and the (signed) `nodeName`; the AuthConfirm carries a
+signature over `"mm-id-v1" ‖ my_eph_pub ‖ peer_eph_pub ‖ nodeName`. When both ends
+present an identity, the verifier — on receiving the peer's AuthConfirm, after the
+PSK tag check — requires **all** of:
+
+1. `peer_id == truncate₁₆(BLAKE2b(peer idPubKey))` (the claimed id matches the key);
+2. the signature verifies against the peer's idPubKey (proves key ownership and
+   authenticates the name, bound to this connection's ephemeral keys);
+3. the peer's key ∈ `trustedKeys`, when that allowlist is non-empty;
+4. `requireIdentity`: a peer that presents no identity is rejected.
+
+Any failure drops the peer (`error_category::Identity`) **before** it reaches
+`Established`, so an impostor never enters dial-race or routing state. The
+ephemeral keys in the transcript make the signature connection-specific and
+non-replayable.
+
+### 19.3 Admit / revoke
+
+`trustedKeys` is an allowlist of admissible identity public keys, each with an
+optional local label. Non-empty ⇒ only those keys are admitted; removing a key
+**revokes** that node with no PSK rotation. Empty ⇒ any peer with a valid,
+self-consistent identity is accepted. (Checks are per-side: under one-sided trust
+the trusting side may briefly half-open before the other drops it, so revoke on
+all honest nodes.)
+
+### 19.4 Names
+
+A node's `nodeName` is authenticated two ways. A **direct neighbor** learns it
+from the verified Hello. **Mesh-wide**, each node floods a signed `IdentityRecord`
+(§5.7a) using the same per-origin, version-dedup, re-flood-except-inbound gossip
+as membership (`peer_manager::flood_self_identity` / `on_peer_identity`): a fresh
+record is pushed to each new neighbor and re-flooded on a keepalive every
+`membershipInterval`. Every node verifies the signature (and allowlist) before
+storing or relaying, so names of non-direct members are known and trustworthy.
+
+`mesh::node_name(peer_id)` resolves a **local label** (operator-assigned in
+`trustedKeys`) first, else the signed gossiped name, else "". `peer_id` stays the
+canonical identifier; names are advisory and not required to be unique.
+
+### 19.5 Build & limitations
+
+Identity uses the same libsodium dependency as §18. It is decentralized: no CA,
+certificates, roles, or expiry. `peer_id` is 16 bytes (a truncated hash; forging a
+key to match a target id is ~128-bit work). Key rotation is manual.

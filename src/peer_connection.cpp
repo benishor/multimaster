@@ -86,6 +86,11 @@ void peer_connection::send_hello() {
         ephKeys_     = crypto::gen_ephemeral(); // fresh per connection => forward secrecy
         h.ephPubKey  = ephKeys_.pk;
     }
+    if (self_.hasIdentity) {
+        h.hasIdentity = true;
+        h.idPubKey    = self_.idKeys.pk;
+        h.nodeName    = self_.nodeName;
+    }
     auto frame = encode_hello(inbound_ ? frame_type::HelloAck : frame_type::Hello, h);
     out_.append(frame.data(), frame.size());
     lastSend_ = event_loop::clock::now();
@@ -93,10 +98,25 @@ void peer_connection::send_hello() {
 }
 
 void peer_connection::send_auth_confirm() {
-    auto frame = encode_auth_confirm(myConfirmTag_);
+    auto frame = encode_auth_confirm(myConfirmTag_, useIdentity_, myIdSig_);
     out_.append(frame.data(), frame.size()); // confirmation is sent in the clear
     lastSend_ = event_loop::clock::now();
     flush_outbound();
+}
+
+std::vector<std::byte> peer_connection::id_transcript(const std::array<std::byte, 32>& firstEph,
+                                                     const std::array<std::byte, 32>& secondEph,
+                                                     const std::string& name) const {
+    static constexpr char label[] = "mm-id-v1";
+    std::vector<std::byte> m;
+    m.reserve((sizeof(label) - 1) + firstEph.size() + secondEph.size() + name.size());
+    m.insert(m.end(), reinterpret_cast<const std::byte*>(label),
+             reinterpret_cast<const std::byte*>(label) + (sizeof(label) - 1));
+    m.insert(m.end(), firstEph.begin(), firstEph.end());
+    m.insert(m.end(), secondEph.begin(), secondEph.end());
+    m.insert(m.end(), reinterpret_cast<const std::byte*>(name.data()),
+             reinterpret_cast<const std::byte*>(name.data()) + name.size());
+    return m;
 }
 
 void peer_connection::on_io_events(std::uint32_t events) {
@@ -252,6 +272,15 @@ bool peer_connection::dispatch(parsed_frame& frame, std::size_t consumed, buffer
         listener_.on_peer_membership(*this, frame.membership);
         if (dead_) return false;
         return true;
+    case frame_type::IdentityRecord:
+        if (state_ != conn_state::Established) {
+            fail(error_category::Protocol, 0, "identity record before handshake");
+            return false;
+        }
+        src.consume(consumed); // frame.identity owns its data (copied out)
+        listener_.on_peer_identity(*this, frame.identity);
+        if (dead_) return false;
+        return true;
     }
     src.consume(consumed);
     return true;
@@ -282,6 +311,13 @@ bool peer_connection::handle_hello(parsed_frame& frame, std::size_t consumed, bu
         return !dead_; // listener may have closed us (dial-race loser)
     }
 
+    // If we run an identity and require peers to as well, a peer without one is
+    // rejected up front.
+    if (self_.hasIdentity && cfg_.requireIdentity && !h.hasIdentity) {
+        fail(error_category::Identity, 0, "peer presented no identity");
+        return false;
+    }
+
     // Secured: derive the session from the peer's ephemeral key, then prove
     // possession of the PSK with a confirmation tag. The peer is not installed
     // until its own confirmation verifies.
@@ -294,7 +330,17 @@ bool peer_connection::handle_hello(parsed_frame& frame, std::size_t consumed, bu
     myConfirmTag_    = hr.myConfirmTag;
     expectedPeerTag_ = hr.expectedPeerTag;
     peerHello_       = h;
-    state_           = conn_state::AwaitingConfirm;
+
+    // Identity runs only when both ends present one; sign the transcript binding
+    // our static key to this connection's ephemeral keys and our name.
+    useIdentity_ = self_.hasIdentity && h.hasIdentity;
+    if (useIdentity_) {
+        auto msg = id_transcript(ephKeys_.pk, h.ephPubKey, self_.nodeName);
+        myIdSig_ = crypto::sign(std::span<const std::byte>(msg.data(), msg.size()),
+                                self_.idKeys.sk);
+    }
+
+    state_ = conn_state::AwaitingConfirm;
     send_auth_confirm();
     return !dead_;
 }
@@ -309,6 +355,38 @@ bool peer_connection::handle_auth_confirm(parsed_frame& frame, std::size_t consu
         fail(error_category::Crypto, 0, "authentication failed");
         return false;
     }
+
+    if (useIdentity_) {
+        if (!frame.has_auth_sig) {
+            fail(error_category::Identity, 0, "missing identity signature");
+            return false;
+        }
+        // Self-certifying: the claimed nodeId must equal hash(identity pubkey).
+        auto derived = crypto::id_from_identity(peerHello_.idPubKey);
+        if (std::memcmp(derived.data(), peerId_.bytes.data(), derived.size()) != 0) {
+            fail(error_category::Identity, 0, "node id does not match identity key");
+            return false;
+        }
+        // The signature proves the peer holds the private key and authenticates
+        // its name, bound to this connection's ephemeral keys.
+        auto msg = id_transcript(peerHello_.ephPubKey, ephKeys_.pk, peerHello_.nodeName);
+        if (!crypto::verify_sig(std::span<const std::byte>(msg.data(), msg.size()), frame.auth_sig,
+                                peerHello_.idPubKey)) {
+            fail(error_category::Identity, 0, "identity signature invalid");
+            return false;
+        }
+        // Allowlist: per-node admit/revoke without rotating the PSK.
+        if (!self_.trustedKeys.empty()) {
+            bool trusted = false;
+            for (const auto& k : self_.trustedKeys)
+                if (k == peerHello_.idPubKey) { trusted = true; break; }
+            if (!trusted) {
+                fail(error_category::Identity, 0, "peer identity not in allowlist");
+                return false;
+            }
+        }
+    }
+
     state_ = conn_state::Established;
     listener_.on_peer_handshake(*this, peerHello_);
     return !dead_; // listener may have closed us (dial-race loser)

@@ -99,6 +99,68 @@ TEST("auth confirm round-trip") {
     CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
     CHECK_EQ(static_cast<int>(out.type), static_cast<int>(frame_type::AuthConfirm));
     CHECK(out.auth_tag == tag);
+    CHECK(!out.has_auth_sig);
+}
+
+TEST("auth confirm with identity signature round-trip") {
+    std::array<std::byte, 32> tag{};
+    std::array<std::byte, 64> sig{};
+    for (std::size_t i = 0; i < tag.size(); ++i) tag[i] = static_cast<std::byte>(i + 3);
+    for (std::size_t i = 0; i < sig.size(); ++i) sig[i] = static_cast<std::byte>(i * 5 + 2);
+    auto frame = encode_auth_confirm(tag, true, sig);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK(out.auth_tag == tag);
+    CHECK(out.has_auth_sig);
+    CHECK(out.auth_sig == sig);
+}
+
+TEST("secure hello with identity carries id key and name") {
+    hello h;
+    h.nodeId          = id_from(4);
+    h.protocolVersion = 1;
+    h.tcpListenPort   = 6000;
+    h.groupName       = "g";
+    h.secure          = true;
+    h.hasIdentity     = true;
+    for (std::size_t i = 0; i < h.ephPubKey.size(); ++i) h.ephPubKey[i] = static_cast<std::byte>(i);
+    for (std::size_t i = 0; i < h.idPubKey.size(); ++i)
+        h.idPubKey[i] = static_cast<std::byte>(200 - i);
+    h.nodeName = "gateway-eu";
+
+    auto frame = encode_hello(frame_type::Hello, h);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK(out.hello_msg.secure);
+    CHECK(out.hello_msg.hasIdentity);
+    CHECK(out.hello_msg.idPubKey == h.idPubKey);
+    CHECK_EQ(out.hello_msg.nodeName, h.nodeName);
+}
+
+TEST("identity record round-trip") {
+    identity_record r;
+    for (std::size_t i = 0; i < r.idPubKey.size(); ++i) r.idPubKey[i] = static_cast<std::byte>(i);
+    r.version = 0x0102030405060708ULL;
+    r.name    = "sensor-07";
+    for (std::size_t i = 0; i < r.signature.size(); ++i) r.signature[i] = static_cast<std::byte>(255 - i);
+
+    auto frame = encode_identity(r);
+    parsed_frame out;
+    std::size_t consumed = 0;
+    auto st = try_decode_frame(std::span<const std::byte>(frame.data(), frame.size()),
+                             1 << 20, out, consumed);
+    CHECK_EQ(static_cast<int>(st), static_cast<int>(decode_status::Ok));
+    CHECK_EQ(static_cast<int>(out.type), static_cast<int>(frame_type::IdentityRecord));
+    CHECK(out.identity.idPubKey == r.idPubKey);
+    CHECK_EQ(out.identity.version, r.version);
+    CHECK_EQ(out.identity.name, r.name);
+    CHECK(out.identity.signature == r.signature);
 }
 
 TEST("data round-trip preserves payload") {

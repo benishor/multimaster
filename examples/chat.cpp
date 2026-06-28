@@ -68,6 +68,24 @@ int main(int argc, char** argv) {
             cfg.psk = argv[++i]; // non-empty => encrypted + authenticated mesh
             continue;
         }
+        if (a == "--identity" && i + 1 < argc) {
+            cfg.identityFile = argv[++i]; // persistent self-certifying identity
+            continue;
+        }
+        if (a == "--name" && i + 1 < argc) {
+            cfg.nodeName = argv[++i]; // signed, gossiped nickname
+            continue;
+        }
+        if (a == "--trust" && i + 1 < argc) {
+            // --trust <pubkeyhex>[=label] : admit this node key (+ optional label)
+            std::string v = argv[++i];
+            auto        eq = v.find('=');
+            mm::trusted_node t;
+            t.publicKeyHex = v.substr(0, eq);
+            if (eq != std::string::npos) t.label = v.substr(eq + 1);
+            cfg.trustedKeys.push_back(std::move(t));
+            continue;
+        }
         mm::seed_peer ep;
         if (parse_endpoint(a, ep)) {
             cfg.staticPeers.push_back(ep); // persistently maintained WAN peer
@@ -78,14 +96,20 @@ int main(int argc, char** argv) {
 
     mm::mesh mesh(cfg);
 
+    // Prefer a node's human name (local label or signed nickname) over its hex id.
+    auto who = [&mesh](mm::peer_id p) {
+        auto n = mesh.node_name(p);
+        return n.empty() ? p.to_string().substr(0, 8) : n;
+    };
+
     mm::callbacks cb;
-    cb.onPeerConnected    = [](mm::peer_id p) { std::cout << "[+ connected]    " << p.to_string() << "\n"; };
-    cb.onPeerDisconnected = [](mm::peer_id p) { std::cout << "[- disconnected] " << p.to_string() << "\n"; };
-    cb.onMemberJoined    = [](mm::peer_id p) { std::cout << "[+ connected]    " << p.to_string() << "\n"; };
-    cb.onMemberLeft = [](mm::peer_id p) { std::cout << "[- disconnected] " << p.to_string() << "\n"; };
-    cb.onPeerLost         = [](mm::peer_id p) { std::cout << "[x lost]         " << p.to_string() << "\n"; };
-    cb.onMessage          = [](mm::peer_id from, mm::bytes data) {
-        std::cout << from.to_string().substr(0, 8) << "> " << to_str(data) << "\n";
+    cb.onPeerConnected    = [&](mm::peer_id p) { std::cout << "[+ connected]    " << who(p) << "\n"; };
+    cb.onPeerDisconnected = [&](mm::peer_id p) { std::cout << "[- disconnected] " << who(p) << "\n"; };
+    cb.onMemberJoined    = [&](mm::peer_id p) { std::cout << "[+ connected]    " << who(p) << "\n"; };
+    cb.onMemberLeft = [&](mm::peer_id p) { std::cout << "[- disconnected] " << who(p) << "\n"; };
+    cb.onPeerLost         = [&](mm::peer_id p) { std::cout << "[x lost]         " << who(p) << "\n"; };
+    cb.onMessage          = [&](mm::peer_id from, mm::bytes data) {
+        std::cout << who(from) << "> " << to_str(data) << "\n";
     };
     cb.onError = [](const mm::error& e) { std::cerr << "[error] " << e.what << "\n"; };
     mesh.set_callbacks(std::move(cb));
@@ -93,6 +117,10 @@ int main(int argc, char** argv) {
     mesh.start();
     std::cout << "this node: " << mesh.id().to_string() << "  port: " << mesh.listen_port()
               << "  group: " << cfg.groupName << (cfg.psk.empty() ? "" : "  [secured]") << "\n";
+    if (auto pub = mesh.identity_public_key(); !pub.empty()) {
+        std::cout << "identity"  << (cfg.nodeName.empty() ? "" : " \"" + cfg.nodeName + "\"")
+                  << " pubkey: " << pub << "  (share for peers' --trust)\n";
+    }
     if (!cfg.staticPeers.empty()) {
         std::cout << "static peers:";
         for (const auto& s : cfg.staticPeers) std::cout << " " << s.host << ":" << s.port;

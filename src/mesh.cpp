@@ -24,5 +24,7 @@ uint16_t mesh::listen_port() const noexcept { return impl_->listen_port(); }
 std::vector<peer_id> mesh::connected_peers() const { return impl_->connected_peers(); }
 std::vector<peer_id> mesh::known_peers() const { return impl_->known_peers(); }
 std::vector<peer_id> mesh::members() const { return impl_->members(); }
+std::string          mesh::node_name(const peer_id& id) const { return impl_->node_name(id); }
+std::string          mesh::identity_public_key() const { return impl_->identity_public_key(); }
 
 } // namespace mm

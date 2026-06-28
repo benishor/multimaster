@@ -164,6 +164,41 @@ bool secure_session::open(std::span<const std::byte> ciphertext, std::vector<std
     return true;
 }
 
+identity_keypair gen_identity() {
+    identity_keypair kp;
+    crypto_sign_keypair(uc(kp.pk.data()), uc(kp.sk.data()));
+    return kp;
+}
+
+identity_keypair identity_from_seed(const seed32& seed) {
+    identity_keypair kp;
+    crypto_sign_seed_keypair(uc(kp.pk.data()), uc(kp.sk.data()), uc(seed.data()));
+    return kp;
+}
+
+seed32 seed_of(const identity_keypair& kp) {
+    seed32 s{};
+    crypto_sign_ed25519_sk_to_seed(uc(s.data()), uc(kp.sk.data()));
+    return s;
+}
+
+std::array<std::byte, 16> id_from_identity(const id_pubkey& pk) {
+    std::array<std::byte, 16> out{};
+    crypto_generichash(uc(out.data()), out.size(), uc(pk.data()), pk.size(), nullptr, 0);
+    return out;
+}
+
+id_sig sign(std::span<const std::byte> msg, const id_seckey& sk) {
+    id_sig sig{};
+    crypto_sign_detached(uc(sig.data()), nullptr, uc(msg.data()), msg.size(), uc(sk.data()));
+    return sig;
+}
+
+bool verify_sig(std::span<const std::byte> msg, const id_sig& sig, const id_pubkey& pk) {
+    return crypto_sign_verify_detached(uc(sig.data()), uc(msg.data()), msg.size(),
+                                       uc(pk.data())) == 0;
+}
+
 #else // !MULTIMASTER_HAVE_CRYPTO — safe stubs (a secured mesh refuses to start)
 
 bool  init() { return false; }
@@ -182,6 +217,12 @@ bool              do_handshake(const ephemeral_keypair&, const key32&, const key
 }
 std::vector<std::byte> secure_session::seal(std::span<const std::byte>) { return {}; }
 bool secure_session::open(std::span<const std::byte>, std::vector<std::byte>&) { return false; }
+identity_keypair gen_identity() { return {}; }
+identity_keypair identity_from_seed(const seed32&) { return {}; }
+seed32           seed_of(const identity_keypair&) { return {}; }
+std::array<std::byte, 16> id_from_identity(const id_pubkey&) { return {}; }
+id_sig sign(std::span<const std::byte>, const id_seckey&) { return {}; }
+bool   verify_sig(std::span<const std::byte>, const id_sig&, const id_pubkey&) { return false; }
 
 #endif
 

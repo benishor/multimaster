@@ -88,7 +88,7 @@ leak into consumer translation units.
 | `socket` | `socket.{hpp,cpp}` | RAII fd wrapper + option helpers (`SOCK_CLOEXEC`, nonblock, reuse, multicast). |
 | `buffer` | `buffer.hpp` | Growable byte buffer with a consume cursor for partial I/O. |
 | `wire` | `wire.{hpp,cpp}` | Pure encode/decode of announce datagrams and TCP frames. No I/O; unit-testable in isolation. |
-| `crypto` | `crypto.{hpp,cpp}` | Thin libsodium wrapper: PSK key derivation, the X25519+PSK handshake, the per-connection AEAD `secure_session`, and the discovery MAC. The only translation unit that touches libsodium. |
+| `crypto` | `crypto.{hpp,cpp}` | Thin libsodium wrapper: PSK key derivation, the X25519+PSK handshake, the per-connection AEAD `secure_session`, the discovery MAC, and Ed25519 node-identity keys/signatures (§13). The only translation unit that touches libsodium. |
 | `peer_id` | `peer_id.{hpp,cpp}` | 128-bit node identifier + hashing + hex (de)serialization. |
 
 ---
@@ -184,7 +184,7 @@ offset size  field
 ```
 
 `frame_type`: `Hello=1`, `HelloAck=2`, `Heartbeat=3`, `Data=4`, `Goodbye=5`,
-`Membership=6`, `AuthConfirm=7` (secured mesh only).
+`Membership=6`, `AuthConfirm=7` (secured), `IdentityRecord=8` (identity mesh; §13).
 
 **Hello / HelloAck body** — exchanged once per connection in both directions:
 ```
@@ -196,11 +196,18 @@ G   groupName
 8   nonce           (random; disambiguates rare same-direction dial dups)
 1   secure          (1 ⇒ the following ephemeral key is present)
 [32 ephPubKey]      (X25519 ephemeral public key; secured mesh only — §12)
+1   hasIdentity     (1 ⇒ the following identity fields are present)
+[32 idPubKey]       (Ed25519 identity public key; identity mesh only — §13)
+[1+N nodeName]      (length-prefixed signed nickname; identity mesh only)
 ```
 
-**AuthConfirm body** (secured mesh only) — a 32-byte handshake confirmation tag
-proving possession of the PSK (§12). Exchanged after the Hellos; the connection
-only reaches `Established` once the peer's tag verifies.
+**AuthConfirm body** (secured mesh only) — the 32-byte PSK confirmation tag, then
+a flag and (on an identity mesh) a 64-byte Ed25519 signature over the handshake
+transcript (§13). Exchanged after the Hellos; the connection only reaches
+`Established` once the peer's tag (and, when present, signature) verifies.
+
+**IdentityRecord body** (identity mesh only) — a node's signed, gossiped name:
+`idPubKey(32) ‖ version(8) ‖ signature(64) ‖ nameLen ‖ name` (§13).
 
 **Heartbeat body** — empty. The frame's arrival is the liveness signal.
 
@@ -425,6 +432,9 @@ connection that `shutdown` just freed.
 - **`tests/secure_smoke_test.cpp`** — real secured `mesh` nodes: encrypted
   broadcast + targeted between PSK peers, and a node with the wrong PSK never
   joining. (Built only when libsodium is available.)
+- **`tests/identity_test.cpp`** — self-certifying identity: derived/stable ids,
+  signed names + local labels, allowlist revocation, `requireIdentity`, and a
+  bridged `B—A—C` topology where B learns C's name via gossip. (libsodium only.)
 
 The suite is dependency-free (a ~40-line harness in `tests/test_harness.hpp`) and
 runs clean under ASan + UBSan with leak detection.
@@ -440,11 +450,12 @@ runs clean under ASan + UBSan with leak detection.
 - **Tuned for tens of nodes.** Targeted routing currently floods when the
   destination is not a direct neighbor; a learned next-hop table (observed from
   broadcast source paths) would make large-mesh unicast cheaper.
-- **Transport security is PSK-based** (§12): a single shared key gates the whole
-  mesh. There is no per-node identity, certificate, or revocation — a future
-  direction would be per-node keypairs with an allowlist. Discovery announces,
-  though MAC-authenticated, remain replayable on the local subnet (an observer can
-  tell a node exists, but still cannot complete the TCP handshake without the PSK).
+- **Identity is PSK-gated and decentralized** (§13): self-certifying Ed25519 keys
+  with an allowlist, but no CA/certificates, roles, or expiry, and key rotation is
+  manual. Identity requires a PSK (it complements transport security; it does not
+  replace it). Discovery announces, though MAC-authenticated, remain replayable on
+  the local subnet (an observer can tell a node exists, but still cannot complete
+  the TCP handshake without the PSK, nor be admitted without a trusted key).
 - Per-link 16-byte node ids could be compressed to small per-connection handles
   to cut Data-frame overhead.
 
@@ -497,3 +508,35 @@ half-speak.
 **Build.** Controlled by `MULTIMASTER_ENABLE_CRYPTO` (default ON, links
 libsodium). With it OFF the library still builds, but a `psk`-configured mesh
 refuses to start.
+
+---
+
+## 13. Node identity (optional, self-certifying)
+
+Transport security proves a peer holds the group PSK, not *which* node it is —
+`nodeId` is otherwise a value a node merely claims. Configuring an identity
+(`identityFile`/`identitySeedHex`, which requires a PSK) gives each node a
+long-lived **Ed25519** keypair and makes `nodeId = truncate₁₆(BLAKE2b(pubkey))`,
+so the id is self-certifying. Set up in `mesh_impl::start()`: the seed is loaded
+(or generated + persisted 0600), the keypair derived, and `nodeId` overridden.
+
+**Handshake binding.** Identity rides on the secured handshake (§12). The Hello
+additionally carries the Ed25519 public key + signed name; the AuthConfirm carries
+a signature over `"mm-id-v1" ‖ my_eph ‖ peer_eph ‖ name`. On AuthConfirm the
+verifier checks (a) `peer_id == hash(pubkey)`, (b) the signature (proves key
+ownership, authenticates the name, bound to this connection), (c) the allowlist
+(`trustedKeys`) if non-empty, and (d) `requireIdentity`. Failure → the peer never
+reaches `Established`, so impostors never enter routing/dial-race state.
+
+**Admit / revoke.** `trustedKeys` is an allowlist of admissible public keys (+
+optional local labels); removing a key revokes that node with no PSK rotation. An
+empty list accepts any peer with a valid self-consistent identity.
+
+**Names.** A node's signed `nodeName` is learned from a direct neighbor's Hello
+and also flooded mesh-wide as a signed `IdentityRecord` frame — the same
+per-origin, version-dedup, re-flood-except-inbound gossip as `membership`
+(`peer_manager::on_peer_identity` / `flood_self_identity`). Every node verifies the
+signature (and allowlist) before storing/relaying, so names of non-direct members
+are known and trustworthy. `mesh::node_name(peer_id)` resolves a local label
+first, else the signed gossiped name. Names are advisory; `peer_id` stays
+canonical.

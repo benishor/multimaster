@@ -15,6 +15,7 @@ enum class error_category {
     Discovery,    // multicast setup or send/recv failure
     Backpressure, // an outbound queue overflowed
     Crypto,       // handshake authentication or record decryption failed
+    Identity,     // node-identity verification failed (bad sig, id mismatch, untrusted/missing key)
     Internal,     // a library invariant was violated
 };
 

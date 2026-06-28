@@ -28,6 +28,14 @@ struct local_identity {
     bool          secure          = false;
     crypto::key32 groupKey{};
     crypto::key32 discoveryKey{};
+
+    // --- self-certifying node identity (set when configured) ----------------
+    bool                     hasIdentity = false;
+    crypto::identity_keypair idKeys{};   // Ed25519; nodeId is derived from idKeys.pk
+    std::string              nodeName;    // self-declared nickname (signed, gossiped)
+    // Parsed allowlist of admissible peer identity keys. Empty ⇒ accept any
+    // valid identity; non-empty ⇒ admit only these keys (per-node revocation).
+    std::vector<crypto::id_pubkey> trustedKeys;
 };
 
 class peer_connection;
@@ -47,6 +55,9 @@ public:
 
     /// A Membership (adjacency gossip) frame arrived.
     virtual void on_peer_membership(peer_connection& c, const membership_record& rec) = 0;
+
+    /// An IdentityRecord (signed node-name gossip) frame arrived.
+    virtual void on_peer_identity(peer_connection& c, const identity_record& rec) = 0;
 
     /// The connection finished (peer closed, error, protocol violation, or
     /// Goodbye). The owner must arrange deferred reaping of `c`.
@@ -115,6 +126,10 @@ private:
     bool dispatch(parsed_frame& f, std::size_t consumed, buffer& src); // false => dead
     bool handle_hello(parsed_frame& f, std::size_t consumed, buffer& src);
     bool handle_auth_confirm(parsed_frame& f, std::size_t consumed, buffer& src);
+    // Transcript signed/verified for identity: "mm-id-v1" || firstEph || secondEph || name.
+    std::vector<std::byte> id_transcript(const std::array<std::byte, 32>& firstEph,
+                                        const std::array<std::byte, 32>& secondEph,
+                                        const std::string& name) const;
     void flush_outbound();
     void enqueue(std::span<const std::byte> frame); // seal if secure+established, else raw
     void update_epoll();
@@ -142,6 +157,8 @@ private:
     std::optional<crypto::secure_session> sess_;
     crypto::tag32                     myConfirmTag_{};
     crypto::tag32                     expectedPeerTag_{};
+    bool                              useIdentity_ = false; // both ends presented an identity
+    crypto::id_sig                    myIdSig_{};           // our transcript signature to send
     hello                             peerHello_;   // saved for post-auth handshake
     buffer                            plain_;       // decrypted inbound frame bytes
 

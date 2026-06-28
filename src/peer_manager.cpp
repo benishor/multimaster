@@ -1,6 +1,7 @@
 #include "peer_manager.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include <arpa/inet.h>
@@ -16,7 +17,14 @@ peer_manager::peer_manager(event_loop& loop, const mesh_config& cfg, const local
                   [this](std::span<const std::byte> frame, int except_fd) {
                       forward_except(frame, except_fd);
                   }),
-      rng_(std::random_device{}()) {}
+      rng_(std::random_device{}()) {
+    // Seed the identity-gossip version from the wall clock so records minted after
+    // a restart outrank any still circulating (ordering tag only, like membership).
+    selfIdVersion_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+}
 
 peer_manager::~peer_manager() = default;
 
@@ -186,6 +194,18 @@ void peer_manager::on_peer_handshake(peer_connection& c, const hello& peer) {
     r.state                 = peer_state::Connected;
     r.reconnectAttempts     = 0;
 
+    // Record the peer's verified self-declared name (identity meshes only).
+    if (peer.hasIdentity) {
+        names_[pid] = peer.nodeName;
+        emit_names_snapshot();
+    }
+    // Send the new neighbor our signed identity record so it (and, via its
+    // re-flood, the rest of the mesh) learns our name.
+    if (self_.hasIdentity) {
+        auto frame = encode_identity(make_self_id_record());
+        c.send_raw(std::span<const std::byte>(frame.data(), frame.size()));
+    }
+
     if (existing) existing->close_gracefully();
 
     if (!wasConnected) {
@@ -201,6 +221,75 @@ void peer_manager::on_peer_data(peer_connection& c, const data_view& view) {
 
 void peer_manager::on_peer_membership(peer_connection& c, const membership_record& rec) {
     membership_.on_remote_record(rec, c.fd(), event_loop::clock::now());
+}
+
+std::vector<std::byte> peer_manager::id_record_msg(std::uint64_t version,
+                                                  const std::string& name) const {
+    static constexpr char  label[] = "mm-idrec-v1";
+    std::vector<std::byte> m;
+    m.reserve((sizeof(label) - 1) + 8 + name.size());
+    m.insert(m.end(), reinterpret_cast<const std::byte*>(label),
+             reinterpret_cast<const std::byte*>(label) + (sizeof(label) - 1));
+    for (int i = 7; i >= 0; --i)
+        m.push_back(static_cast<std::byte>((version >> (i * 8)) & 0xFF));
+    m.insert(m.end(), reinterpret_cast<const std::byte*>(name.data()),
+             reinterpret_cast<const std::byte*>(name.data()) + name.size());
+    return m;
+}
+
+identity_record peer_manager::make_self_id_record() {
+    identity_record rec;
+    rec.idPubKey = self_.idKeys.pk;
+    rec.version  = ++selfIdVersion_;
+    rec.name     = self_.nodeName;
+    auto msg     = id_record_msg(rec.version, rec.name);
+    rec.signature = crypto::sign(std::span<const std::byte>(msg.data(), msg.size()), self_.idKeys.sk);
+    return rec;
+}
+
+void peer_manager::flood_self_identity(int except_fd) {
+    if (!self_.hasIdentity) return;
+    auto frame = encode_identity(make_self_id_record());
+    forward_except(std::span<const std::byte>(frame.data(), frame.size()), except_fd);
+    lastIdFlood_ = event_loop::clock::now();
+}
+
+void peer_manager::on_peer_identity(peer_connection& c, const identity_record& rec) {
+    if (!self_.hasIdentity) return; // identity gossip only runs in identity meshes
+
+    // The origin's id is the hash of its identity key (self-certifying).
+    auto    raw = crypto::id_from_identity(rec.idPubKey);
+    peer_id origin;
+    std::memcpy(origin.bytes.data(), raw.data(), raw.size());
+    if (origin == self_.nodeId) return; // our own gossip echoed back
+
+    // Honor the allowlist: don't propagate names for keys we wouldn't admit.
+    if (!self_.trustedKeys.empty()) {
+        bool trusted = false;
+        for (const auto& k : self_.trustedKeys)
+            if (k == rec.idPubKey) { trusted = true; break; }
+        if (!trusted) return;
+    }
+
+    // The signature binds the name to the key (and version); reject forgeries.
+    auto msg = id_record_msg(rec.version, rec.name);
+    if (!crypto::verify_sig(std::span<const std::byte>(msg.data(), msg.size()), rec.signature,
+                            rec.idPubKey))
+        return;
+
+    // Version dedup also terminates the flood.
+    auto it = idVersions_.find(origin);
+    if (it != idVersions_.end() && rec.version <= it->second) return;
+    idVersions_[origin] = rec.version;
+
+    if (auto n = names_.find(origin); n == names_.end() || n->second != rec.name) {
+        names_[origin] = rec.name;
+        emit_names_snapshot();
+    }
+
+    // Relay onward to every neighbor except the inbound link.
+    auto frame = encode_identity(rec);
+    forward_except(std::span<const std::byte>(frame.data(), frame.size()), c.fd());
 }
 
 void peer_manager::update_local_membership() {
@@ -364,6 +453,12 @@ void peer_manager::tick() {
     // Membership upkeep: keepalive re-flood + expire stale records.
     membership_.tick(now);
 
+    // Identity-name gossip keepalive (same cadence): periodically re-flood our
+    // signed record so newly-arrived nodes learn our name.
+    if (self_.hasIdentity && now - lastIdFlood_ >= cfg_.membershipInterval) {
+        flood_self_identity(-1);
+    }
+
     // Fallback: if isolated, re-dial seed peers.
     if (estab_.empty()) dial_seeds();
 
@@ -485,5 +580,7 @@ void peer_manager::emit_known_snapshot() {
     for (auto& [id, r] : records_) v.push_back(id);
     delegate_.known_snapshot(std::move(v));
 }
+
+void peer_manager::emit_names_snapshot() { delegate_.names_snapshot(names_); }
 
 } // namespace mm

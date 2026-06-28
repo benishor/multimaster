@@ -126,4 +126,40 @@ TEST("discovery MAC verifies and rejects tampering / wrong key") {
                                     std::span<const std::byte>(tag.data(), tag.size()), dkey));
 }
 
+TEST("identity: seed is deterministic, keypair derives stable id") {
+    crypto::seed32 seed{};
+    for (std::size_t i = 0; i < seed.size(); ++i) seed[i] = static_cast<std::byte>(i + 1);
+    auto a = crypto::identity_from_seed(seed);
+    auto b = crypto::identity_from_seed(seed);
+    CHECK(a.pk == b.pk);
+    CHECK(crypto::id_from_identity(a.pk) == crypto::id_from_identity(b.pk));
+    // Different seed => different id.
+    seed[0] = std::byte{0xFF};
+    auto c = crypto::identity_from_seed(seed);
+    CHECK(!(crypto::id_from_identity(c.pk) == crypto::id_from_identity(a.pk)));
+    // seed_of round-trips back to the same seed (and thus same keypair).
+    auto kp   = crypto::gen_identity();
+    auto s2   = crypto::seed_of(kp);
+    auto kp2  = crypto::identity_from_seed(s2);
+    CHECK(kp.pk == kp2.pk);
+}
+
+TEST("identity: sign / verify, with tamper and wrong-key rejection") {
+    auto kp    = crypto::gen_identity();
+    auto other = crypto::gen_identity();
+    auto msg   = bytes_of("bind this transcript");
+    std::span<const std::byte> m(msg.data(), msg.size());
+    auto sig = crypto::sign(m, kp.sk);
+
+    CHECK(crypto::verify_sig(m, sig, kp.pk));
+    // wrong public key
+    CHECK(!crypto::verify_sig(m, sig, other.pk));
+    // tampered message
+    auto msg2 = bytes_of("bind this transcript!");
+    CHECK(!crypto::verify_sig(std::span<const std::byte>(msg2.data(), msg2.size()), sig, kp.pk));
+    // tampered signature
+    sig[0] ^= std::byte{0x01};
+    CHECK(!crypto::verify_sig(m, sig, kp.pk));
+}
+
 int main() { return mm::test::run(); }
