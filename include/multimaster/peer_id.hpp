@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <optional>
 #include <string>
@@ -18,8 +20,20 @@ namespace mm {
 struct peer_id {
     std::array<std::byte, 16> bytes{};
 
-    bool operator==(const peer_id&) const = default;
-    auto operator<=>(const peer_id&) const = default;
+    // Compare over the raw bytes. Equivalent to defaulting these on a
+    // std::array<std::byte,16>, but spelled explicitly because libc++ (the NDK's
+    // standard library) does not synthesise a usable operator<=> for an array of
+    // std::byte, which would leave the defaulted spaceship implicitly deleted.
+    // memcmp gives the same lexicographic total order (std::byte is unsigned).
+    bool operator==(const peer_id& o) const noexcept {
+        return std::memcmp(bytes.data(), o.bytes.data(), bytes.size()) == 0;
+    }
+    std::strong_ordering operator<=>(const peer_id& o) const noexcept {
+        const int c = std::memcmp(bytes.data(), o.bytes.data(), bytes.size());
+        return c < 0 ? std::strong_ordering::less
+             : c > 0 ? std::strong_ordering::greater
+                     : std::strong_ordering::equal;
+    }
 
     /// Lowercase hex, 32 chars, no separators.
     [[nodiscard]] std::string to_string() const;
