@@ -244,6 +244,12 @@ With an identity configured:
   byte- and algorithm-level reference: every wire field, routing pseudocode,
   timing tables, worked end-to-end examples, and a failure-scenario catalog.
 
+## Used by
+
+- **[xlog2](https://github.com/yo6ssw/xlog2)** — a Linux amateur-radio logging
+  program that uses multimaster for peer-to-peer logbook sync and a distributed
+  QRZ cache across LAN (and WAN, via static peers).
+
 ## License
 
 Licensed under the **GNU Lesser General Public License v3.0 or later**
