@@ -243,3 +243,10 @@ With an identity configured:
 - [docs/how-the-mesh-works.md](docs/how-the-mesh-works.md) — the complete,
   byte- and algorithm-level reference: every wire field, routing pseudocode,
   timing tables, worked end-to-end examples, and a failure-scenario catalog.
+
+## License
+
+Licensed under the **GNU Lesser General Public License v3.0 or later**
+(`LGPL-3.0-or-later`) — so it can be linked into projects under other licenses
+while changes to multimaster itself stay open. See [`COPYING.LESSER`](COPYING.LESSER)
+(the LGPL) and [`COPYING`](COPYING) (the GPL it builds on) for the full texts.
