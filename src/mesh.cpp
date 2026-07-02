@@ -7,10 +7,11 @@
 
 namespace mm {
 
-mesh::mesh(mesh_config cfg) : impl_(std::make_unique<mesh_impl>(std::move(cfg))) {}
+mesh::mesh(mesh_config cfg)
+    : impl_(std::make_unique<mesh_impl>(std::move(cfg))) {}
 mesh::~mesh() = default;
 
-mesh::mesh(mesh&&) noexcept            = default;
+mesh::mesh(mesh&&) noexcept = default;
 mesh& mesh::operator=(mesh&&) noexcept = default;
 
 void mesh::set_callbacks(callbacks cb) { impl_->set_callbacks(std::move(cb)); }
@@ -21,13 +22,19 @@ bool mesh::is_running() const noexcept { return impl_->is_running(); }
 void mesh::broadcast(bytes data) { impl_->broadcast(data); }
 void mesh::send(peer_id dst, bytes data) { impl_->send(dst, data); }
 
-peer_id   mesh::id() const noexcept { return impl_->id(); }
+peer_id mesh::id() const noexcept { return impl_->id(); }
 uint16_t mesh::listen_port() const noexcept { return impl_->listen_port(); }
 
-std::vector<peer_id> mesh::connected_peers() const { return impl_->connected_peers(); }
+std::vector<peer_id> mesh::connected_peers() const {
+  return impl_->connected_peers();
+}
 std::vector<peer_id> mesh::known_peers() const { return impl_->known_peers(); }
 std::vector<peer_id> mesh::members() const { return impl_->members(); }
-std::string          mesh::node_name(const peer_id& id) const { return impl_->node_name(id); }
-std::string          mesh::identity_public_key() const { return impl_->identity_public_key(); }
+std::string mesh::node_name(const peer_id& id) const {
+  return impl_->node_name(id);
+}
+std::string mesh::identity_public_key() const {
+  return impl_->identity_public_key();
+}
 
-} // namespace mm
+}  // namespace mm

@@ -16,4 +16,4 @@ namespace mm {
 /// duration of that callback. Copy it if you need to retain the data.
 using bytes = std::span<const std::byte>;
 
-} // namespace mm
+}  // namespace mm
