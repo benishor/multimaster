@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 Adrian Scripcă (YO6SSW)
+
 // mm_chat — a tiny broadcast chat over the multimaster mesh.
 //
 // On a LAN, peers discover each other automatically via multicast:

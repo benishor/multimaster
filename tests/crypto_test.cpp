@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 Adrian Scripcă (YO6SSW)
+
 // Unit tests for the crypto layer: PSK key agreement, AEAD record round-trips,
 // tamper / wrong-key rejection, and discovery MAC verification.
 

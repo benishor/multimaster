@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 Adrian Scripcă (YO6SSW)
+
 // Integration smoke test: several mesh nodes in one process, wired together via
 // seed peers on 127.0.0.1 (deterministic; does not depend on multicast working
 // in the test environment). Verifies broadcast reaches all peers, targeted send

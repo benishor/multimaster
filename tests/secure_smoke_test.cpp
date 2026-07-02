@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2025 Adrian Scripcă (YO6SSW)
+
 // Integration test for the secured (PSK) mesh: nodes sharing a PSK connect and
 // exchange encrypted broadcast/targeted traffic, while a node with the wrong PSK
 // is never able to join. Wired via seed peers on 127.0.0.1 (no multicast needed).
