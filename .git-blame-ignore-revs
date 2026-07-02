@@ -1,0 +1,6 @@
+# Revisions to skip in `git blame` (bulk reformatting, no behavioral change).
+# Enable locally with:  git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honors this file automatically.
+
+# Apply clang-format (Google style) to all sources
+71446e55284809d8a00fde60e89265ca68ec5958
